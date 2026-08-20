@@ -427,6 +427,35 @@ test("binds: already-ours via plugin id in arg hides the offer", () => {
   assert.strictEqual(p.toAdd.length, 0)
 })
 
+test("binds: notify body lists assigned keys", () => {
+  const body = Binds.notifyBody([{ chosen: "SUPER + ALT + C", desc: "Chroma" }], [])
+  assert.ok(body.indexOf("SUPER + ALT + C — Chroma") === 0)
+  const argv = Binds.notifyArgv("Chroma", "Chroma keybindings", body)
+  assert.strictEqual(argv[0], "omarchy")
+  assert.strictEqual(argv[1], "notification")
+  assert.strictEqual(argv[2], "send")
+  assert.strictEqual(argv[3], "--app-name")
+  assert.strictEqual(argv[4], "Chroma")
+  assert.strictEqual(argv[5], "-g")
+  assert.strictEqual(argv[7], "Chroma keybindings")
+})
+
+test("binds: claimAuto is one-shot", () => {
+  assert.strictEqual(Binds.claimAuto(), true)
+  assert.strictEqual(Binds.claimAuto(), false)
+})
+
+test("qml: no Add keybindings button or keys chip", () => {
+  for (const rel of ["Overlay.qml", "BarWidget.qml", "qml/Hud.qml", "qml/HelpCard.qml"]) {
+    const src = fs.readFileSync(path.join(ROOT, rel), "utf8")
+    assert.ok(src.indexOf("Add keybindings") < 0, rel)
+    assert.ok(src.indexOf('text: "keys"') < 0, rel)
+  }
+  const overlay = fs.readFileSync(path.join(ROOT, "Overlay.qml"), "utf8")
+  assert.ok(overlay.indexOf("Binds.claimAuto()") >= 0)
+  assert.ok(overlay.indexOf("notifyArgv(") >= 0)
+})
+
 const summary = passed + " passed, " + failed + " failed"
 process.stdout.write(summary + "\n")
 process.exit(failed ? 1 : 0)

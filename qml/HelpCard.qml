@@ -10,10 +10,6 @@ BorderSurface {
   property string fontFamily: Style.font.menuFamily
   property bool ocrAvailable: false
   property bool qrAvailable: false
-  property bool offerBinds: false
-  property string offerNote: ""
-
-  signal keysRequested()
 
   width: Style.space(420)
   height: col.implicitHeight + Style.space(32)
@@ -79,38 +75,6 @@ BorderSurface {
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
         }
-      }
-    }
-
-    Text {
-      visible: root.offerBinds
-      width: col.width
-      text: root.offerNote.length ? root.offerNote : "Add Super+Alt+C (skips combos you already use)"
-      color: root.foreground
-      opacity: 0.8
-      wrapMode: Text.WordWrap
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.body
-    }
-
-    Rectangle {
-      visible: root.offerBinds
-      width: bindLabel.implicitWidth + Style.space(16)
-      height: bindLabel.implicitHeight + Style.space(10)
-      radius: Math.max(4, Style.cornerRadius / 2)
-      color: Color.accent
-      Text {
-        id: bindLabel
-        anchors.centerIn: parent
-        text: "Add keybindings"
-        color: root.background
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.body
-      }
-      MouseArea {
-        anchors.fill: parent
-        cursorShape: Qt.PointingHandCursor
-        onClicked: root.keysRequested()
       }
     }
   }
