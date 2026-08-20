@@ -5,10 +5,10 @@ Conservative choices where the Omarchy / Quickshell / Hyprland API was not 100% 
 ## Plugin host (reference wins)
 
 - **Manifest** is schemaVersion 1 with `kinds: ["bar-widget","overlay"]`, `keepLoaded: true`, and a `barWidget` metadata block (`displayName`, `category`, `defaultSection`, `defaults`, `schema`). Settings arrive **inline on the shell.json entry** — there is no plugin `config.json` for widget settings. Pick history is runtime state, not a setting.
-- **Entry points are `Item`s**, not `ShellRoot`. Overlay exposes `open(payloadJson)` / `close()` / `toggle()` plus `pick(arg)` / `palette(arg)` / `revert(arg)` / `status(arg)` (string in, string out) on the **root Item**, which is what `omarchy-shell shell call <id> <method> <arg>` invokes. `IpcHandler` with the same id forwards to those functions.
+- **Entry points are `Item`s**, not `ShellRoot`. Overlay exposes `open(payloadJson)` / `close()` / `toggle()` plus `pick(arg)` / `palette(arg)` / `revert(arg)` / `status(arg)` (string in, string out) on the **root Item**. `omarchy-shell shell call <id> <method> <arg>` invokes those on the overlay loader (`keepLoaded`). The overlay `IpcHandler` with the same id is the reliable bind path: `omarchy-shell io.github.chris.chroma pick '{}'`. Every IpcHandler method takes a string argument (empty when unused).
 - **`keepLoaded: true`** so the overlay (and the chromad Process) outlives a summon, matching image-picker.
 - **Injected properties** on load: `shell`, `manifest`, `pluginRegistry`, `omarchyPath` (and `bar` on the widget). Overlay still functions if some are missing.
-- **IPC verbs** are `omarchy-shell shell summon|hide|toggle|call`. `IpcHandler` target is the plugin id. First-party plugins use short names; a unique id avoids collisions.
+- **IPC verbs** are `omarchy-shell shell summon|hide|toggle` for the overlay, plus `omarchy-shell io.github.chris.chroma <method> <arg>` for the overlay IpcHandler. `shell call` is extra while the overlay is loaded. First-party plugins use short names; a unique id avoids collisions.
 - **Third-party id** is `io.github.chris.chroma` — not `omarchy.*`.
 - **No second Quickshell process.**
 

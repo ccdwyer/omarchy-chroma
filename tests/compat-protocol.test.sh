@@ -100,7 +100,7 @@ else
   unset CHROMA_MONITORS
 fi
 
-# Overlay root methods (shell call contract)
+# Overlay root methods (shell call / IpcHandler contract)
 for fn in "function pick(arg)" "function palette(arg)" "function revert(arg)" "function status(arg)"; do
   grep -q "$fn" "$ROOT/Overlay.qml" && ok "Overlay root $fn" || bad "missing Overlay $fn"
 done

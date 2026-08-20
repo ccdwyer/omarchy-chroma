@@ -102,16 +102,22 @@ Pick history is runtime state at `~/.local/state/chroma/history.json`.
 
 ## IPC
 
+`shell summon` / `hide` / `toggle` are host verbs for the overlay kind. Plugin methods (`pick`, `palette`, `revert`, `status`) live on the overlay root **and** on an `IpcHandler` with the same id. `shell call <id> <method> <arg>` hits the overlay loader (works here because the overlay is `keepLoaded` and exposes those methods). The reliable bind path is the IpcHandler target — always pass the string argument:
+
 ```sh
 omarchy-shell shell summon io.github.chris.chroma '{}'
 omarchy-shell shell hide io.github.chris.chroma
-omarchy-shell shell call io.github.chris.chroma pick '{}'
-omarchy-shell shell call io.github.chris.chroma palette '{}'
-omarchy-shell shell call io.github.chris.chroma revert '{}'
-omarchy-shell shell call io.github.chris.chroma status '{}'
+omarchy-shell io.github.chris.chroma pick '{}'
+omarchy-shell io.github.chris.chroma palette '{}'
+omarchy-shell io.github.chris.chroma revert '{}'
+omarchy-shell io.github.chris.chroma status '{}'
 ```
 
-Those methods live on the overlay **root Item** (`pick`/`palette`/`revert`/`status` each take a string argument and return a string), which is what `shell call <id> <method> <arg>` invokes. An `IpcHandler` with the same id forwards to the same functions.
+`shell call` still works for those methods while the overlay is loaded:
+
+```sh
+omarchy-shell shell call io.github.chris.chroma pick '{}'
+```
 
 ## Tests (off-device)
 
