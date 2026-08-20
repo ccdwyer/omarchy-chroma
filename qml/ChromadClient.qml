@@ -104,7 +104,13 @@ Item {
       root.ready = true
       root.hello(msg)
     } else if (ev === "frame") {
-      root.frameRect = { x: msg.x || 0, y: msg.y || 0, w: msg.w || 128, h: msg.h || 128 }
+      root.frameRect = {
+        x: msg.x || 0,
+        y: msg.y || 0,
+        w: msg.w || 128,
+        h: msg.h || 128,
+        scale: msg.scale || 1
+      }
       root.frameGen = msg.n || (root.frameGen + 1)
       root.frameUrl = Capture.cacheBustUrl(msg.path, root.frameGen, msg.slot || 0)
       if (msg.pixel)

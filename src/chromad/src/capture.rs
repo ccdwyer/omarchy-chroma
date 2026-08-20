@@ -82,7 +82,8 @@ impl Capturer {
         }
     }
 
-    pub fn capture_region(&mut self, rect: Rect, live: bool) -> Result<Frame, String> {
+    /// `physical` is output-local buffer pixels. Callers keep the logical rect for QML.
+    pub fn capture_on(&mut self, output: &str, physical: Rect, live: bool) -> Result<Frame, String> {
         let backend = if live {
             self.live_backend
         } else {
@@ -93,12 +94,14 @@ impl Capturer {
                 #[cfg(target_os = "linux")]
                 {
                     if let Some(w) = self.wayland.as_mut() {
-                        return w.capture_region(rect, backend == Backend::ExtCopy);
+                        return w.capture_output(output, physical, backend == Backend::ExtCopy);
                     }
                 }
-                grim::capture_region(rect.x, rect.y, rect.w, rect.h)
+                grim::capture_region_on(output, physical.x, physical.y, physical.w, physical.h)
             }
-            Backend::Grim => grim::capture_region(rect.x, rect.y, rect.w, rect.h),
+            Backend::Grim => {
+                grim::capture_region_on(output, physical.x, physical.y, physical.w, physical.h)
+            }
             Backend::None => Err("no capture backend".into()),
         }
     }
@@ -115,23 +118,6 @@ impl Capturer {
                 grim::capture_full()
             }
             Backend::Grim => grim::capture_full(),
-            Backend::None => Err("no capture backend".into()),
-        }
-    }
-
-    pub fn capture_monitor(&mut self, name: &str, rect: Rect) -> Result<Frame, String> {
-        match self.oneshot_backend {
-            Backend::ExtCopy | Backend::WlrScreencopy => {
-                #[cfg(target_os = "linux")]
-                {
-                    if let Some(w) = self.wayland.as_mut() {
-                        return w.capture_output(name, rect, self.oneshot_backend == Backend::ExtCopy);
-                    }
-                }
-                grim::capture_monitor(name).or_else(|_| grim::capture_region(rect.x, rect.y, rect.w, rect.h))
-            }
-            Backend::Grim => grim::capture_monitor(name)
-                .or_else(|_| grim::capture_region(rect.x, rect.y, rect.w, rect.h)),
             Backend::None => Err("no capture backend".into()),
         }
     }

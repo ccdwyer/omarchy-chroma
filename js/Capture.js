@@ -164,16 +164,24 @@ function hudAtTop(cursorY, screenH) {
     return cursorY > screenH * 0.72
 }
 
+function frameScale(frame) {
+    var s = frame && frame.scale !== undefined ? Number(frame.scale) : 1
+    if (!s || s <= 0)
+        return 1
+    return s
+}
+
 function sourceClip(cursorX, cursorY, frame, view) {
     if (!frame)
         return { x: 0, y: 0, w: view || 48, h: view || 48 }
-    var v = view || 48
+    var scale = frameScale(frame)
+    var v = (view || 48) * scale
     var fx = Number(frame.x) || 0
     var fy = Number(frame.y) || 0
-    var fw = Number(frame.w) || REGION
-    var fh = Number(frame.h) || REGION
-    var x = cursorX - fx - v / 2
-    var y = cursorY - fy - v / 2
+    var fw = (Number(frame.w) || REGION) * scale
+    var fh = (Number(frame.h) || REGION) * scale
+    var x = (cursorX - fx) * scale - v / 2
+    var y = (cursorY - fy) * scale - v / 2
     x = clamp(x, 0, Math.max(0, fw - v))
     y = clamp(y, 0, Math.max(0, fh - v))
     return { x: x, y: y, w: Math.min(v, fw), h: Math.min(v, fh) }

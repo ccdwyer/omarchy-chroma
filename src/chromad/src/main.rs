@@ -129,6 +129,7 @@ struct Server {
     gen: u64,
     dir: PathBuf,
     last_frame_rect: Option<Rect>,
+    last_frame_scale: f64,
 }
 
 impl Server {
@@ -150,6 +151,7 @@ impl Server {
             gen: 0,
             dir,
             last_frame_rect: None,
+            last_frame_scale: 1.0,
         }
     }
 
@@ -186,14 +188,22 @@ impl Server {
         region_around(self.cursor.0, self.cursor.1, REGION, &self.monitors)
     }
 
+    fn capture_mapped(&mut self, mapped: &coords::MappedCapture, live: bool) -> Result<Frame, String> {
+        self.capturer
+            .capture_on(&mapped.output, mapped.physical, live)
+    }
+
     fn capture_live(&mut self) -> Result<Frame, String> {
-        let rect = self.current_region();
-        let frame = self.capturer.capture_region(rect, true)?;
-        self.last_frame_rect = Some(rect);
+        let logical = self.current_region();
+        let mapped = coords::map_capture(logical, &self.monitors)
+            .ok_or_else(|| "no monitor for cursor".to_string())?;
+        let frame = self.capture_mapped(&mapped, true)?;
+        self.last_frame_rect = Some(mapped.logical);
+        self.last_frame_scale = mapped.scale;
         Ok(frame)
     }
 
-    fn emit_frame(&mut self, frame: &Frame, rect: Rect) -> Result<(), String> {
+    fn emit_frame(&mut self, frame: &Frame, rect: Rect, scale: f64) -> Result<(), String> {
         let (path, n, slot) = self.write_slot(frame)?;
         let cx = (frame.width / 2).min(frame.width.saturating_sub(1));
         let cy = (frame.height / 2).min(frame.height.saturating_sub(1));
@@ -208,12 +218,13 @@ impl Server {
             "y": rect.y,
             "w": rect.w,
             "h": rect.h,
+            "scale": scale,
             "pixel": pixel_json(pixel)
         }));
         Ok(())
     }
 
-    fn oneshot_rect(&mut self, kind: &str) -> Result<(Frame, Rect), String> {
+    fn oneshot_rect(&mut self, kind: &str) -> Result<(Frame, Rect, f64), String> {
         if let Some(frozen) = self.frozen.clone() {
             let rect = self.freeze_rect.unwrap_or(Rect {
                 x: 0,
@@ -221,7 +232,7 @@ impl Server {
                 w: frozen.width as i32,
                 h: frozen.height as i32,
             });
-            return Ok((frozen, rect));
+            return Ok((frozen, rect, self.last_frame_scale));
         }
         let focused = self
             .monitors
@@ -231,26 +242,31 @@ impl Server {
             .or_else(|| self.monitors.first().cloned());
         match kind {
             "window" => {
-                let rect = window_rect_on_focused(&self.monitors).ok_or_else(|| "no active window".to_string())?;
-                let frame = self.capturer.capture_region(rect, false)?;
-                Ok((frame, rect))
+                let logical = window_rect_on_focused(&self.monitors)
+                    .ok_or_else(|| "no active window".to_string())?;
+                let mapped = coords::map_capture(logical, &self.monitors)
+                    .ok_or_else(|| "no monitor for window".to_string())?;
+                let frame = self.capture_mapped(&mapped, false)?;
+                Ok((frame, mapped.logical, mapped.scale))
             }
             "monitor" => {
                 let m = focused.ok_or_else(|| "no monitor".to_string())?;
-                let rect = coords::monitor_rect(&m);
-                let frame = self.capturer.capture_monitor(&m.name, rect)?;
-                Ok((frame, rect))
+                let mapped = coords::map_monitor(&m);
+                let frame = self.capture_mapped(&mapped, false)?;
+                Ok((frame, mapped.logical, mapped.scale))
             }
             "region" => {
-                let rect = self.current_region();
-                let frame = self.capturer.capture_region(rect, false)?;
-                Ok((frame, rect))
+                let logical = self.current_region();
+                let mapped = coords::map_capture(logical, &self.monitors)
+                    .ok_or_else(|| "no monitor for cursor".to_string())?;
+                let frame = self.capture_mapped(&mapped, false)?;
+                Ok((frame, mapped.logical, mapped.scale))
             }
             _ => {
                 if let Some(m) = focused {
-                    let rect = coords::monitor_rect(&m);
-                    let frame = self.capturer.capture_monitor(&m.name, rect)?;
-                    Ok((frame, rect))
+                    let mapped = coords::map_monitor(&m);
+                    let frame = self.capture_mapped(&mapped, false)?;
+                    Ok((frame, mapped.logical, mapped.scale))
                 } else {
                     let frame = self.capturer.capture_full()?;
                     let rect = Rect {
@@ -259,7 +275,7 @@ impl Server {
                         w: frame.width as i32,
                         h: frame.height as i32,
                     };
-                    Ok((frame, rect))
+                    Ok((frame, rect, 1.0))
                 }
             }
         }
@@ -294,7 +310,7 @@ impl Server {
                 emit(json!({"ok": true, "event": "stream", "running": false}));
             }
             "pick" => match self.oneshot_rect("region") {
-                Ok((frame, _rect)) => {
+                Ok((frame, _rect, _scale)) => {
                     let p = frame.pixel(frame.width / 2, frame.height / 2);
                     let mut v = pixel_json(p);
                     v["ok"] = json!(true);
@@ -307,13 +323,14 @@ impl Server {
             "palette" => {
                 let source = cmd.source.unwrap_or_else(|| "window".into());
                 match self.oneshot_rect(&source) {
-                    Ok((frame, rect)) => {
+                    Ok((frame, rect, scale)) => {
                         let colors = kmeans_palette(frame.width, frame.height, &frame.rgba, 6);
                         emit(json!({
                             "ok": true,
                             "event": "palette",
                             "source": source,
                             "x": rect.x, "y": rect.y, "w": rect.w, "h": rect.h,
+                            "scale": scale,
                             "colors": nearest_hexes(&colors)
                         }));
                     }
@@ -323,8 +340,8 @@ impl Server {
             "oneshot" => {
                 let kind = cmd.kind.unwrap_or_else(|| "monitor".into());
                 match self.oneshot_rect(&kind) {
-                    Ok((frame, rect)) => {
-                        if let Err(e) = self.emit_frame(&frame, rect) {
+                    Ok((frame, rect, scale)) => {
+                        if let Err(e) = self.emit_frame(&frame, rect, scale) {
                             fail(&e);
                         }
                     }
@@ -332,10 +349,11 @@ impl Server {
                 }
             }
             "freeze" => match self.oneshot_rect("monitor") {
-                Ok((frame, rect)) => {
+                Ok((frame, rect, scale)) => {
                     self.frozen = Some(frame.clone());
                     self.freeze_rect = Some(rect);
-                    if let Err(e) = self.emit_frame(&frame, rect) {
+                    self.last_frame_scale = scale;
+                    if let Err(e) = self.emit_frame(&frame, rect, scale) {
                         fail(&e);
                     } else {
                         emit(json!({"ok": true, "event": "frozen", "factor": cmd.factor.unwrap_or(8)}));
@@ -349,14 +367,14 @@ impl Server {
                 emit(json!({"ok": true, "event": "unfrozen"}));
             }
             "ocr" => match self.oneshot_rect(cmd.source.as_deref().unwrap_or("monitor")) {
-                Ok((frame, _)) => match ocr::run_tesseract(&frame) {
+                Ok((frame, _, _)) => match ocr::run_tesseract(&frame) {
                     Ok(text) => emit(json!({"ok": true, "event": "ocr", "text": text})),
                     Err(e) => fail(&e),
                 },
                 Err(e) => fail(&e),
             },
             "qr" => match self.oneshot_rect(cmd.source.as_deref().unwrap_or("monitor")) {
-                Ok((frame, _)) => match ocr::run_zbar(&frame) {
+                Ok((frame, _, _)) => match ocr::run_zbar(&frame) {
                     Ok(text) => emit(json!({"ok": true, "event": "qr", "text": text})),
                     Err(e) => fail(&e),
                 },
@@ -436,7 +454,7 @@ impl Server {
         match self.capture_live() {
             Ok(frame) => {
                 let rect = self.last_frame_rect.unwrap_or(self.current_region());
-                if let Err(e) = self.emit_frame(&frame, rect) {
+                if let Err(e) = self.emit_frame(&frame, rect, self.last_frame_scale) {
                     fail(&e);
                 }
             }

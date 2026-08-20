@@ -136,6 +136,53 @@ pub fn clamp_window_to_monitor(win: Rect, mon: &Monitor) -> Rect {
     win.intersect(monitor_rect(mon))
 }
 
+/// Output-local physical rect for Wayland/grim. `logical` stays in Hyprland space for QML.
+#[derive(Clone, Debug)]
+pub struct MappedCapture {
+    pub output: String,
+    pub logical: Rect,
+    pub physical: Rect,
+    pub scale: f64,
+}
+
+pub fn map_capture(logical: Rect, monitors: &[Monitor]) -> Option<MappedCapture> {
+    let cx = logical.x as f64 + (logical.w as f64) / 2.0;
+    let cy = logical.y as f64 + (logical.h as f64) / 2.0;
+    let mon = containing(monitors, cx, cy)?;
+    Some(map_rect_on(logical, mon))
+}
+
+pub fn map_rect_on(logical: Rect, mon: &Monitor) -> MappedCapture {
+    let (_, _, scale) = logical_size(mon);
+    let physical = Rect {
+        x: ((logical.x - mon.x) as f64 * scale).round() as i32,
+        y: ((logical.y - mon.y) as f64 * scale).round() as i32,
+        w: ((logical.w as f64) * scale).round().max(1.0) as i32,
+        h: ((logical.h as f64) * scale).round().max(1.0) as i32,
+    };
+    MappedCapture {
+        output: mon.name.clone(),
+        logical,
+        physical,
+        scale,
+    }
+}
+
+pub fn map_monitor(mon: &Monitor) -> MappedCapture {
+    let (_, _, scale) = logical_size(mon);
+    MappedCapture {
+        output: mon.name.clone(),
+        logical: monitor_rect(mon),
+        physical: Rect {
+            x: 0,
+            y: 0,
+            w: mon.width.max(1),
+            h: mon.height.max(1),
+        },
+        scale,
+    }
+}
+
 pub fn parse_monitors(json: &str) -> Result<Vec<Monitor>, serde_json::Error> {
     serde_json::from_str(json)
 }
@@ -207,5 +254,36 @@ mod tests {
         assert_eq!(r.x, 0);
         assert_eq!(r.y, 0);
         assert_eq!(r.w, 128);
+    }
+
+    #[test]
+    fn map_capture_1_5x_is_output_local_physical() {
+        let mons = mons(&fixture("monitors-1.5x.json"));
+        let logical = Rect {
+            x: 100,
+            y: 50,
+            w: 128,
+            h: 128,
+        };
+        let mapped = map_capture(logical, &mons).unwrap();
+        assert_eq!(mapped.output, "eDP-1");
+        assert_eq!(mapped.logical, logical);
+        assert_eq!(mapped.physical.x, 150);
+        assert_eq!(mapped.physical.y, 75);
+        assert_eq!(mapped.physical.w, 192);
+        assert_eq!(mapped.physical.h, 192);
+        assert_eq!(mapped.scale, 1.5);
+    }
+
+    #[test]
+    fn map_monitor_physical_is_buffer_size() {
+        let m = &mons(&fixture("monitors-2x.json"))[0];
+        let mapped = map_monitor(m);
+        assert_eq!(mapped.physical.x, 0);
+        assert_eq!(mapped.physical.y, 0);
+        assert_eq!(mapped.physical.w, 2560);
+        assert_eq!(mapped.physical.h, 1600);
+        assert_eq!(mapped.logical.w, 1280);
+        assert_eq!(mapped.logical.h, 800);
     }
 }

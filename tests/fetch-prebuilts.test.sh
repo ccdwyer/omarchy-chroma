@@ -46,5 +46,12 @@ else
   ok "verify fails without SHA256SUMS"
 fi
 
+origin=$(sh "$ROOT/scripts/fetch-prebuilts.sh" --parse-origin "https://github.com/acme/chroma.lens.git")
+if [ "$origin" = "acme/chroma.lens" ]; then
+  ok "origin inference keeps dots in repo names"
+else
+  bad "origin inference: $origin"
+fi
+
 printf '%s\n' "$fail failed"
 [ "$fail" -eq 0 ]

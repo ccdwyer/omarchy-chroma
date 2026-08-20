@@ -189,8 +189,8 @@ impl WaylandCapture {
             .ok_or_else(|| "no wl_output".to_string())?;
         let name = out.name.clone();
         let rect = Rect {
-            x: out.x,
-            y: out.y,
+            x: 0,
+            y: 0,
             w: out.width.max(1),
             h: out.height.max(1),
         };
@@ -239,8 +239,8 @@ impl WaylandCapture {
             .ok_or_else(|| format!("output {name} missing"))?
             .output
             .clone();
-        let out_x = self.output_named(name).map(|o| o.x).unwrap_or(0);
-        let out_y = self.output_named(name).map(|o| o.y).unwrap_or(0);
+        let local_x = rect.x.max(0);
+        let local_y = rect.y.max(0);
 
         self.state.ext_pending = Some(ExtPending {
             width: 0,
@@ -361,8 +361,6 @@ impl WaylandCapture {
             height: height as u32,
             rgba,
         };
-        let local_x = (rect.x - out_x).max(0);
-        let local_y = (rect.y - out_y).max(0);
         let _ = self.conn;
         drop(guards);
         if local_x == 0 && local_y == 0 && rect.w >= width && rect.h >= height {
@@ -384,10 +382,8 @@ impl WaylandCapture {
             .ok_or_else(|| format!("output {name} missing"))?
             .output
             .clone();
-        let out_x = self.output_named(name).map(|o| o.x).unwrap_or(0);
-        let out_y = self.output_named(name).map(|o| o.y).unwrap_or(0);
-        let local_x = (rect.x - out_x).max(0);
-        let local_y = (rect.y - out_y).max(0);
+        let local_x = rect.x.max(0);
+        let local_y = rect.y.max(0);
         self.state.pending = Some(PendingFrame {
             width: 0,
             height: 0,
@@ -474,6 +470,11 @@ impl WaylandCapture {
             frame.destroy();
             shm_buf.destroy();
             return Err(e);
+        }
+        if !self.state.pending.as_ref().map(|p| p.ready).unwrap_or(false) {
+            frame.destroy();
+            shm_buf.destroy();
+            return Err("screencopy timed out".into());
         }
         let rgba = shm_to_rgba(&shm_buf)?;
         frame.destroy();

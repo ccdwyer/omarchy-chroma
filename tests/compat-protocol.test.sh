@@ -70,6 +70,9 @@ done
 
 grep -q 'if (!root.themeLive)' "$ROOT/Overlay.qml" && ok "preview snapshots when not live" || bad "missing themeLive snapshot"
 grep -q 'clearThemeSession' "$ROOT/Overlay.qml" && ok "revert clears theme session" || bad "missing clearThemeSession"
+grep -q 'moduleName: "io.github.chris.chroma"' "$ROOT/Overlay.qml" && ok "overlay moduleName" || bad "overlay moduleName missing"
+grep -q 'AnchorChanges' "$ROOT/Overlay.qml" && ok "HUD uses AnchorChanges" || bad "HUD anchors"
+grep -q 'chromad not ready' "$ROOT/Overlay.qml" && ok "theme apply fails closed without chromad" || bad "theme fail-closed"
 
 printf '%s\n' "$fail failed"
 [ "$fail" -eq 0 ]

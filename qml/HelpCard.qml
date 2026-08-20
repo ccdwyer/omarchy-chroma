@@ -32,10 +32,12 @@ BorderSurface {
     ]
     if (ocrAvailable)
       list.push(["o", "OCR (tesseract)"])
+    else
+      list.push(["", "OCR: pacman -S tesseract"])
     if (qrAvailable)
       list.push(["q", "QR (zbarimg)"])
     else
-      list.push(["", "OCR/QR: pacman -S tesseract zbar"])
+      list.push(["", "QR: pacman -S zbar"])
     return list
   }
 

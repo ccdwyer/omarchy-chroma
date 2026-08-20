@@ -43,11 +43,16 @@ if [ "${1:-}" = "--verify" ]; then
   exit $?
 fi
 
+if [ "${1:-}" = "--parse-origin" ]; then
+  printf '%s\n' "$2" | sed 's#.*github.com[:/]##' | sed 's#\.git$##' | sed 's#/$##'
+  exit 0
+fi
+
 repo=${1:-}
 tag=${2:-latest}
 if [ -z "$repo" ]; then
   url=$(git -C "$ROOT" remote get-url origin 2>/dev/null || true)
-  repo=$(printf '%s' "$url" | sed -n 's#.*github.com[:/]\([^/]*/[^/.]*\).*#\1#p' | sed 's/\.git$//')
+  repo=$(printf '%s' "$url" | sed 's#.*github.com[:/]##' | sed 's#\.git$##' | sed 's#/$##')
 fi
 if [ -z "$repo" ]; then
   echo "fetch-prebuilts.sh: pass owner/repo (no origin remote)" >&2

@@ -12,11 +12,7 @@ The catalog already has fragments (Omacolor, Loupe, Theme Colors). Chroma is the
 omarchy plugin add <git-url> --enable
 ```
 
-`--enable` turns the plugin on and places the bar chip in `barWidget.defaultSection` (`right`). Move it later with the documented layout command:
-
-```sh
-omarchy bar move io.github.chris.chroma --section right
-```
+`--enable` turns the plugin on. Bar widgets start in `barWidget.defaultSection` (`right`). Move a widget with `omarchy bar move` as documented in the Quattro shell README (that command edits `shell.json`; this plugin does not invent extra flags).
 
 Then build or fetch the helper (optional; grim-only pick mode still gives picker / palette / theme):
 

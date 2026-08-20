@@ -292,6 +292,14 @@ test("capture: straddling window is clipped to the focused monitor", () => {
   assert.strictEqual(clipped.h, 800)
 })
 
+test("capture: sourceClip at 1.5x uses physical pixels of the buffer", () => {
+  const frame = { x: 100, y: 50, w: 128, h: 128, scale: 1.5 }
+  const clip = Capture.sourceClip(164, 114, frame, 48)
+  assert.ok(clip.w === 72)
+  assert.ok(clip.x >= 0)
+  assert.ok(clip.x + clip.w <= 128 * 1.5)
+})
+
 test("capture: sourceClip stays inside the last 128px frame", () => {
   const frame = { x: 100, y: 100, w: 128, h: 128 }
   const clip = Capture.sourceClip(120, 130, frame, 48)

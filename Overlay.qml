@@ -13,6 +13,7 @@ import "qml"
 
 Item {
   id: root
+  moduleName: "io.github.chris.chroma"
 
   property var shell: null
   property var manifest: null
@@ -385,12 +386,12 @@ Item {
     interval: 80
     repeat: false
     onTriggered: {
-      if (client.ready) {
-        root.awaitingThemeValid = true
-        client.validateTheme(root.themeDir)
-      } else {
-        root.applyPreview()
+      if (!client.ready) {
+        root.toast = "chromad not ready — theme not applied"
+        return
       }
+      root.awaitingThemeValid = true
+      client.validateTheme(root.themeDir)
     }
   }
 
@@ -681,10 +682,28 @@ Item {
     Hud {
       id: hud
       anchors.horizontalCenter: parent.horizontalCenter
-      anchors.bottom: parent.bottom
-      anchors.bottomMargin: Capture.hudAtTop(root.cursorY, panel.height) ? undefined : (Style.gapsOut + Style.space(18))
-      anchors.top: Capture.hudAtTop(root.cursorY, panel.height) ? parent.top : undefined
-      anchors.topMargin: Capture.hudAtTop(root.cursorY, panel.height) ? (Style.gapsOut + Style.space(18)) : 0
+      states: [
+        State {
+          name: "top"
+          when: Capture.hudAtTop(root.cursorY, panel.height)
+          AnchorChanges { target: hud; anchors.top: panel.top }
+          PropertyChanges {
+            target: hud
+            anchors.topMargin: Style.gapsOut + Style.space(18)
+            anchors.bottomMargin: 0
+          }
+        },
+        State {
+          name: "bottom"
+          when: !Capture.hudAtTop(root.cursorY, panel.height)
+          AnchorChanges { target: hud; anchors.bottom: panel.bottom }
+          PropertyChanges {
+            target: hud
+            anchors.bottomMargin: Style.gapsOut + Style.space(18)
+            anchors.topMargin: 0
+          }
+        }
+      ]
       pixel: root.pixel
       hexA: root.hexA
       hexB: root.hexB

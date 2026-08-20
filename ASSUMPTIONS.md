@@ -26,7 +26,7 @@ Conservative choices where the Omarchy / Quickshell / Hyprland API was not 100% 
 - **Frame transport:** two files under `/dev/shm/chroma-<pid>/` (else `$XDG_RUNTIME_DIR`, else tmp) plus `?n=` cache-bust. If a `file://` query string makes Qt refuse the path, the slot filename still changes (`frame0.png` / `frame1.png`).
 - **QML Image `sourceClipRect`** is used for local crop/zoom. ShaderEffect was not required.
 - Wayland protocol code is `cfg(target_os = "linux")`. On this macOS machine it is not linked. **No Linux ELF is committed** (there is no cross-toolchain here; fake binaries are forbidden). `.github/workflows/chromad-linux.yml` builds x86_64 (native) and aarch64 (gcc-aarch64-linux-gnu) on Ubuntu, writes `SHA256SUMS`, and attaches them to GitHub Releases. `scripts/fetch-prebuilts.sh` installs those assets into `bin/chromad`. `build.sh` remains the source path. Missing binary → grim fallback.
-- Coordinate mapping treats `hyprctl -j monitors` `width`/`height` as compositor-reported pixels and `scale` as the factor. Logical size = width/scale; physical = (logical − origin) × scale. `chromad --calibrate` is the gate; 1x/1.5x/2x nested Hyprland cannot be run here.
+- Coordinate mapping treats `hyprctl -j monitors` `width`/`height` as compositor-reported pixels and `scale` as the factor. Logical size = width/scale. **Capture converts logical cursor/window/monitor rects to output-local physical pixels** (`coords::map_capture` / `map_monitor`) before Wayland or grim. Frame events still carry the **logical** `x,y,w,h` plus `scale` so QML `sourceClipRect` can map cursor micro-movement onto the physical buffer. `chromad --calibrate` remains the on-device gate.
 
 ## Theme apply
 
