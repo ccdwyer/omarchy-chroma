@@ -1,6 +1,6 @@
 import QtQuick
 import qs.Commons
-import "../js/Color.js" as Color
+import "../js/Color.js" as ColorMath
 
 Rectangle {
   id: root
@@ -9,7 +9,7 @@ Rectangle {
   property color foreground: Color.menu.text
   property string fontFamily: Style.font.menuFamily
 
-  readonly property var info: (hexA && hexB) ? Color.contrastInfo(hexA, hexB) : null
+  readonly property var info: (hexA && hexB) ? ColorMath.contrastInfo(hexA, hexB) : null
   readonly property bool pass: info ? info.aa : false
 
   visible: info !== null

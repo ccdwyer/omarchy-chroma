@@ -23,15 +23,14 @@ fn run_grim(args: &[&str]) -> Result<Frame, String> {
 }
 
 /// Cursor excluded: never pass grim `-c`.
-/// `x,y,w,h` are output-local physical pixels.
+/// `x,y,w,h` are compositor-layout coordinates (grim `-g` / xdg-output space).
+/// Unknown output names are an error — no silent fallback to another output.
 pub fn capture_region_on(output: &str, x: i32, y: i32, w: i32, h: i32) -> Result<Frame, String> {
-    let geom = format!("{},{} {}x{}", x, y, w.max(1), h.max(1));
-    if !output.is_empty() {
-        if let Ok(frame) = run_grim(&["-t", "ppm", "-o", output, "-g", &geom, "-"]) {
-            return Ok(frame);
-        }
+    if output.is_empty() {
+        return Err("unresolved output name".into());
     }
-    run_grim(&["-t", "ppm", "-g", &geom, "-"])
+    let geom = format!("{},{} {}x{}", x, y, w.max(1), h.max(1));
+    run_grim(&["-t", "ppm", "-o", output, "-g", &geom, "-"])
 }
 
 #[allow(dead_code)]
@@ -41,6 +40,9 @@ pub fn capture_region(x: i32, y: i32, w: i32, h: i32) -> Result<Frame, String> {
 
 #[allow(dead_code)]
 pub fn capture_monitor(name: &str) -> Result<Frame, String> {
+    if name.is_empty() {
+        return Err("unresolved output name".into());
+    }
     run_grim(&["-t", "ppm", "-o", name, "-"])
 }
 

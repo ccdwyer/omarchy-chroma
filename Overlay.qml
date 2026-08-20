@@ -13,7 +13,7 @@ import "qml"
 
 Item {
   id: root
-  moduleName: "io.github.chris.chroma"
+  property string moduleName: "io.github.chris.chroma"
 
   property var shell: null
   property var manifest: null
@@ -47,6 +47,7 @@ Item {
   property string toast: ""
   property string hint: ""
   property int historyRev: 0
+  property int hideAckTries: 0
   property int motionMs: reduceMotion ? 0 : 150
 
   property color background: Color.menu.background
@@ -117,6 +118,7 @@ Item {
     client.stopStream()
     if (root.freezeOpen)
       client.unfreeze()
+    root.pendingAction = ""
     root.opened = false
     root.helpOpen = false
     root.paletteOpen = false
@@ -178,8 +180,23 @@ Item {
 
   function withHiddenCapture(action) {
     root.pendingAction = action
+    var alreadyHidden = !panel.visible
     root.capturing = true
-    hideTimer.restart()
+    if (alreadyHidden)
+      root.ackOverlayHidden()
+  }
+
+  function ackOverlayHidden() {
+    if (!root.pendingAction.length)
+      return
+    root.hideAckTries = 0
+    hideAckProc.running = false
+    hideAckProc.running = true
+  }
+
+  function chromaStillMapped(text) {
+    var t = String(text || "")
+    return t.indexOf('"namespace":"chroma"') !== -1 || t.indexOf('"namespace": "chroma"') !== -1
   }
 
   function runPending() {
@@ -244,6 +261,11 @@ Item {
     }
     if (!root.themeLive)
       root.snapshotTheme()
+    if (!ThemeSession.hasRevertTarget()) {
+      root.toast = "no revert target — refusing preview"
+      return
+    }
+    root.originalTheme = ThemeSession.snapshot().original
     writeThemeProc.running = false
     writeThemeProc.command = [
       "sh", "-c",
@@ -278,6 +300,12 @@ Item {
   }
 
   function applyPreview() {
+    if (!ThemeSession.hasRevertTarget()) {
+      root.toast = "no revert target — refusing preview"
+      ThemeSession.markApplyFailed()
+      root.themeLive = false
+      return
+    }
     root.themeApplyName = "chroma-preview"
     themeSetProc.running = false
     themeSetProc.command = ["omarchy-theme-set", "chroma-preview"]
@@ -288,6 +316,10 @@ Item {
     root.awaitingThemeValid = false
     if (!ok) {
       root.toast = "chroma-preview failed validation"
+      return
+    }
+    if (!ThemeSession.hasRevertTarget()) {
+      root.toast = "no revert target — refusing preview"
       return
     }
     root.applyPreview()
@@ -375,10 +407,36 @@ Item {
   }
 
   Timer {
-    id: hideTimer
-    interval: 34
+    id: hideAckRetry
+    interval: 16
     repeat: false
-    onTriggered: root.runPending()
+    onTriggered: {
+      hideAckProc.running = false
+      hideAckProc.running = true
+    }
+  }
+
+  Process {
+    id: hideAckProc
+    running: false
+    command: ["hyprctl", "-j", "layers"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        if (!root.pendingAction.length || !root.capturing)
+          return
+        if (root.chromaStillMapped(text) && root.hideAckTries < 24) {
+          root.hideAckTries += 1
+          hideAckRetry.restart()
+          return
+        }
+        root.runPending()
+      }
+    }
+    onExited: function(code) {
+      if (code !== 0 && root.pendingAction.length && root.capturing)
+        root.runPending()
+    }
   }
 
   Timer {
@@ -548,6 +606,10 @@ Item {
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
     exclusionMode: ExclusionMode.Ignore
+    onVisibleChanged: {
+      if (!visible && root.capturing && root.pendingAction.length)
+        root.ackOverlayHidden()
+    }
 
     Item {
       id: keyCatcher
@@ -626,7 +688,7 @@ Item {
       hoverEnabled: true
       acceptedButtons: Qt.LeftButton | Qt.RightButton
       onPositionChanged: function(mouse) {
-        if (root.rulerOpen && root.ruler.start)
+        if (root.rulerOpen && ruler.start)
           ruler.dragTo(mouse.x, mouse.y)
       }
       onPressed: function(mouse) {
@@ -713,7 +775,7 @@ Item {
       picks: root.historyOpen ? root.picks : root.picks.slice(0, 8)
       foreground: root.foreground
       background: root.background
-      borderSpec: root.borderSpec
+      surfaceBorderSpec: root.borderSpec
       fontFamily: root.fontFamily
       opacity: root.opened ? 1 : 0
       onCopyRequested: root.copyHex(true)
@@ -758,7 +820,7 @@ Item {
       anchors.centerIn: parent
       foreground: root.foreground
       background: root.background
-      borderSpec: root.borderSpec
+      surfaceBorderSpec: root.borderSpec
       fontFamily: root.fontFamily
       ocrAvailable: client.ocrAvailable
       qrAvailable: client.qrAvailable
@@ -771,7 +833,7 @@ Item {
       message: root.toast
       foreground: root.foreground
       background: root.background
-      borderSpec: root.borderSpec
+      surfaceBorderSpec: root.borderSpec
       motionMs: root.motionMs
     }
   }

@@ -213,6 +213,23 @@ test("theme session: never records chroma-preview as the revert target", () => {
   assert.strictEqual(ThemeSession.snapshot().original, "")
 })
 
+test("theme session: non-live preview overwrites or clears a stale original", () => {
+  ThemeSession.beginPreview("tokyo-night", false)
+  assert.strictEqual(ThemeSession.snapshot().original, "tokyo-night")
+  ThemeSession.beginPreview("chroma-preview", false)
+  assert.strictEqual(ThemeSession.snapshot().original, "")
+  assert.strictEqual(ThemeSession.hasRevertTarget(), false)
+  ThemeSession.beginPreview("catppuccin", false)
+  assert.strictEqual(ThemeSession.snapshot().original, "catppuccin")
+  ThemeSession.beginPreview("", false)
+  assert.strictEqual(ThemeSession.snapshot().original, "")
+  ThemeSession.beginPreview("ok", false)
+  ThemeSession.markApplied()
+  ThemeSession.beginPreview("", true)
+  assert.strictEqual(ThemeSession.snapshot().original, "ok")
+  assert.strictEqual(ThemeSession.hasRevertTarget(), true)
+})
+
 test("theme: mapping a catppuccin-like palette keeps mocha-dark background", () => {
   const palette = ["#1e1e2e", "#cdd6f4", "#89b4fa", "#f38ba8", "#a6e3a1", "#f9e2af"]
   const mapped = Theme.mapPalette(palette)

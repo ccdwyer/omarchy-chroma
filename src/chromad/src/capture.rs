@@ -82,8 +82,12 @@ impl Capturer {
         }
     }
 
-    /// `physical` is output-local buffer pixels. Callers keep the logical rect for QML.
-    pub fn capture_on(&mut self, output: &str, physical: Rect, live: bool) -> Result<Frame, String> {
+    /// Wayland backends consume `physical` (output-local). Grim consumes `layout`
+    /// (compositor-layout). Unknown output names fail closed.
+    pub fn capture_on(&mut self, mapped: &coords::MappedCapture, live: bool) -> Result<Frame, String> {
+        if mapped.output.is_empty() {
+            return Err("unresolved output name".into());
+        }
         let backend = if live {
             self.live_backend
         } else {
@@ -94,14 +98,16 @@ impl Capturer {
                 #[cfg(target_os = "linux")]
                 {
                     if let Some(w) = self.wayland.as_mut() {
-                        return w.capture_output(output, physical, backend == Backend::ExtCopy);
+                        return w.capture_output(
+                            &mapped.output,
+                            mapped.physical,
+                            backend == Backend::ExtCopy,
+                        );
                     }
                 }
-                grim::capture_region_on(output, physical.x, physical.y, physical.w, physical.h)
+                grim_capture(mapped)
             }
-            Backend::Grim => {
-                grim::capture_region_on(output, physical.x, physical.y, physical.w, physical.h)
-            }
+            Backend::Grim => grim_capture(mapped),
             Backend::None => Err("no capture backend".into()),
         }
     }
@@ -120,6 +126,20 @@ impl Capturer {
             Backend::Grim => grim::capture_full(),
             Backend::None => Err("no capture backend".into()),
         }
+    }
+}
+
+fn grim_capture(mapped: &coords::MappedCapture) -> Result<Frame, String> {
+    if mapped.full_output {
+        grim::capture_monitor(&mapped.output)
+    } else {
+        grim::capture_region_on(
+            &mapped.output,
+            mapped.layout.x,
+            mapped.layout.y,
+            mapped.layout.w,
+            mapped.layout.h,
+        )
     }
 }
 

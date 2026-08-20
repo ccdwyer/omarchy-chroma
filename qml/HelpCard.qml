@@ -6,7 +6,7 @@ BorderSurface {
   id: root
   property color foreground: Color.menu.text
   property color background: Color.menu.background
-  property var borderSpec: Border.surfaceSpec("menu", "border", Color.menu.border, 1)
+  property var surfaceBorderSpec: Border.surfaceSpec("menu", "border", Color.menu.border, 1)
   property string fontFamily: Style.font.menuFamily
   property bool ocrAvailable: false
   property bool qrAvailable: false
@@ -15,7 +15,7 @@ BorderSurface {
   height: col.implicitHeight + Style.space(32)
   radius: Style.cornerRadius
   color: background
-  borderSpec: root.borderSpec
+  borderSpec: root.surfaceBorderSpec
 
   readonly property var rows: {
     var list = [

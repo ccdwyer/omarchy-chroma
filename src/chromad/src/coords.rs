@@ -136,13 +136,22 @@ pub fn clamp_window_to_monitor(win: Rect, mon: &Monitor) -> Rect {
     win.intersect(monitor_rect(mon))
 }
 
-/// Output-local physical rect for Wayland/grim. `logical` stays in Hyprland space for QML.
+/// Capture mapping for one region.
+///
+/// * `logical` — Hyprland / QML space (hyprctl cursorpos, window `at`).
+/// * `physical` — output-local buffer pixels for Wayland ext/wlr capture.
+/// * `layout` — compositor-layout (xdg-output / slurp) for grim `-g`.
+///   Grim treats `-g` as global layout, not output-local physical pixels.
 #[derive(Clone, Debug)]
 pub struct MappedCapture {
     pub output: String,
     pub logical: Rect,
+    /// Output-local buffer pixels. Read by the Wayland backend on Linux.
+    #[allow(dead_code)]
     pub physical: Rect,
+    pub layout: Rect,
     pub scale: f64,
+    pub full_output: bool,
 }
 
 pub fn map_capture(logical: Rect, monitors: &[Monitor]) -> Option<MappedCapture> {
@@ -160,26 +169,37 @@ pub fn map_rect_on(logical: Rect, mon: &Monitor) -> MappedCapture {
         w: ((logical.w as f64) * scale).round().max(1.0) as i32,
         h: ((logical.h as f64) * scale).round().max(1.0) as i32,
     };
+    let layout = Rect {
+        x: logical.x,
+        y: logical.y,
+        w: logical.w.max(1),
+        h: logical.h.max(1),
+    };
     MappedCapture {
         output: mon.name.clone(),
         logical,
         physical,
+        layout,
         scale,
+        full_output: false,
     }
 }
 
 pub fn map_monitor(mon: &Monitor) -> MappedCapture {
     let (_, _, scale) = logical_size(mon);
+    let logical = monitor_rect(mon);
     MappedCapture {
         output: mon.name.clone(),
-        logical: monitor_rect(mon),
+        logical,
         physical: Rect {
             x: 0,
             y: 0,
             w: mon.width.max(1),
             h: mon.height.max(1),
         },
+        layout: logical,
         scale,
+        full_output: true,
     }
 }
 
@@ -272,7 +292,44 @@ mod tests {
         assert_eq!(mapped.physical.y, 75);
         assert_eq!(mapped.physical.w, 192);
         assert_eq!(mapped.physical.h, 192);
+        assert_eq!(mapped.layout.x, 100);
+        assert_eq!(mapped.layout.y, 50);
+        assert_eq!(mapped.layout.w, 128);
+        assert_eq!(mapped.layout.h, 128);
         assert_eq!(mapped.scale, 1.5);
+        assert!(!mapped.full_output);
+    }
+
+    #[test]
+    fn map_capture_dual_right_monitor_layout_is_global() {
+        let mons = mons(&fixture("monitors-dual.json"));
+        let logical = Rect {
+            x: 2000,
+            y: 100,
+            w: 128,
+            h: 128,
+        };
+        let mapped = map_capture(logical, &mons).unwrap();
+        assert_eq!(mapped.output, "HDMI-A-1");
+        assert_eq!(mapped.physical.x, 80);
+        assert_eq!(mapped.physical.y, 100);
+        assert_eq!(mapped.layout.x, 2000);
+        assert_eq!(mapped.layout.y, 100);
+    }
+
+    #[test]
+    fn map_capture_negative_layout_stays_signed() {
+        let mons = mons(&fixture("monitors-left.json"));
+        let logical = Rect {
+            x: -1000,
+            y: 10,
+            w: 128,
+            h: 128,
+        };
+        let mapped = map_capture(logical, &mons).unwrap();
+        assert_eq!(mapped.output, "HDMI-1");
+        assert_eq!(mapped.layout.x, -1000);
+        assert_eq!(mapped.physical.x, 920);
     }
 
     #[test]
@@ -285,5 +342,7 @@ mod tests {
         assert_eq!(mapped.physical.h, 1600);
         assert_eq!(mapped.logical.w, 1280);
         assert_eq!(mapped.logical.h, 800);
+        assert_eq!(mapped.layout, mapped.logical);
+        assert!(mapped.full_output);
     }
 }

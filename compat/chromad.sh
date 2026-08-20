@@ -17,8 +17,11 @@ else
   SHM="${TMPDIR:-/tmp}/chroma-$PID"
 fi
 mkdir -p "$SHM"
+STOP=0
+request_stop() { STOP=1; }
 cleanup_shm() { rm -rf "$SHM"; }
-trap cleanup_shm EXIT INT TERM
+trap request_stop INT TERM
+trap cleanup_shm EXIT
 SLOT=0
 GEN=0
 
@@ -38,54 +41,163 @@ capabilities() {
 
 region_geom() {
   x=${1:-0}; y=${2:-0}
-  gx=$((x - 64)); gy=$((y - 64))
-  [ "$gx" -lt 0 ] && gx=0
-  [ "$gy" -lt 0 ] && gy=0
+  if have python3 && have hyprctl; then
+    if python3 - "$x" "$y" <<'PY'
+import json, subprocess, sys
+x = int(float(sys.argv[1]))
+y = int(float(sys.argv[2]))
+size = 128
+half = size // 2
+try:
+    mons = json.loads(subprocess.check_output(["hyprctl", "-j", "monitors"], text=True))
+except Exception:
+    sys.exit(1)
+if not isinstance(mons, list) or not mons:
+    sys.exit(1)
+
+def logical_wh(m):
+    scale = float(m.get("scale") or 1) or 1.0
+    return (
+        int(m.get("x") or 0),
+        int(m.get("y") or 0),
+        int(int(m.get("width") or 0) / scale),
+        int(int(m.get("height") or 0) / scale),
+    )
+
+found = None
+focused = None
+for m in mons:
+    mx, my, mw, mh = logical_wh(m)
+    if m.get("focused"):
+        focused = m
+    if mx <= x < mx + max(mw, 1) and my <= y < my + max(mh, 1):
+        found = m
+        break
+mon = found or focused or mons[0]
+mx, my, mw, mh = logical_wh(mon)
+gx = x - half
+gy = y - half
+max_x = mx + mw - size
+max_y = my + mh - size
+if max_x < mx:
+    gx = mx
+else:
+    gx = min(max(gx, mx), max_x)
+if max_y < my:
+    gy = my
+else:
+    gy = min(max(gy, my), max_y)
+print("%d,%d %dx%d" % (gx, gy, size, size))
+PY
+    then
+      return 0
+    fi
+  fi
+  gx=$((x - 64))
+  gy=$((y - 64))
   printf '%s' "$gx,$gy 128x128"
+}
+
+focused_monitor() {
+  have hyprctl || return 1
+  have python3 || return 1
+  python3 - <<'PY'
+import json, subprocess, sys
+try:
+    mons = json.loads(subprocess.check_output(["hyprctl", "-j", "monitors"], text=True))
+except Exception:
+    sys.exit(1)
+if not isinstance(mons, list) or not mons:
+    sys.exit(1)
+m = next((x for x in mons if x.get("focused")), mons[0])
+name = str(m.get("name") or "")
+scale = float(m.get("scale") or 1) or 1.0
+mx, my = int(m.get("x") or 0), int(m.get("y") or 0)
+mw = int(int(m.get("width") or 0) / scale)
+mh = int(int(m.get("height") or 0) / scale)
+if not name or mw <= 0 or mh <= 0:
+    sys.exit(1)
+print("%s\t%d,%d %dx%d" % (name, mx, my, mw, mh))
+PY
 }
 
 grim_ppm() {
   # cursor excluded: never pass -c
+  # compositor-layout geometry for -g; never a silent full-desktop fallback
   geom=$1
   out=$2
-  if have grim; then
-    if [ "$geom" = "full" ]; then
-      grim -t ppm "$out" || return 1
-    else
-      grim -t ppm -g "$geom" "$out" || return 1
-    fi
-  else
+  output=${3:-}
+  if ! have grim; then
     return 1
+  fi
+  if [ "$geom" = "output" ]; then
+    [ -n "$output" ] || return 1
+    grim -t ppm -o "$output" "$out" || return 1
+  elif [ -n "$output" ]; then
+    grim -t ppm -o "$output" -g "$geom" "$out" || return 1
+  else
+    grim -t ppm -g "$geom" "$out" || return 1
   fi
 }
 
 pixel_from_ppm() {
   file=$1
-  python3 - "$file" <<'PY' 2>/dev/null || awk_pixel "$file"
+  if [ "${CHROMA_NO_PYTHON:-}" = "1" ] || ! have python3; then
+    return 1
+  fi
+  python3 - "$file" <<'PY' 2>/dev/null || return 1
 import sys
-p=sys.argv[1]
-b=open(p,'rb').read()
-if not b.startswith(b'P6'):
-    print('{"hex":"#000000","r":0,"g":0,"b":0}'); sys.exit(0)
-i=b.find(b'\n')
-rest=b[i+1:]
-while rest.startswith(b'#'):
-    rest=rest[rest.find(b'\n')+1:]
-hdr, _, data = rest.partition(b'\n')
-parts=hdr.split()
-w=int(parts[0]); h=int(parts[1])
-# skip maxval line if still in data
-if b'\n' in data[:8]:
-    data=data[data.find(b'\n')+1:]
-cx=w//2; cy=h//2
-off=(cy*w+cx)*3
-r,g,bl=data[off],data[off+1],data[off+2]
-print('{"hex":"#%02x%02x%02x","r":%d,"g":%d,"b":%d,"rgb":"rgb(%d, %d, %d)"}'%(r,g,bl,r,g,bl,r,g,bl))
-PY
-}
+p = sys.argv[1]
+try:
+    b = open(p, "rb").read()
+except OSError:
+    sys.exit(1)
+if not b.startswith(b"P6"):
+    sys.exit(1)
 
-awk_pixel() {
-  printf '%s' '{"hex":"#808080","r":128,"g":128,"b":128}'
+def skip(buf, i):
+    n = len(buf)
+    while i < n:
+        c = buf[i:i+1]
+        if c in b" \t\r\n":
+            i += 1
+            continue
+        if c == b"#":
+            nl = buf.find(b"\n", i)
+            if nl < 0:
+                return n
+            i = nl + 1
+            continue
+        break
+    return i
+
+def token(buf, i):
+    i = skip(buf, i)
+    j = i
+    n = len(buf)
+    while j < n and buf[j:j+1] not in b" \t\r\n#":
+        j += 1
+    return buf[i:j].decode("ascii"), j
+
+try:
+    w_s, i = token(b, 2)
+    h_s, i = token(b, i)
+    max_s, i = token(b, i)
+    w, h, mv = int(w_s), int(h_s), int(max_s)
+except Exception:
+    sys.exit(1)
+if w <= 0 or h <= 0 or mv <= 0 or mv > 255:
+    sys.exit(1)
+if i < len(b) and b[i:i+1] in b" \t\r\n":
+    i += 1
+data = b[i:]
+cx, cy = w // 2, h // 2
+off = (cy * w + cx) * 3
+if off + 2 >= len(data):
+    sys.exit(1)
+r, g, bl = data[off], data[off+1], data[off+2]
+print('{"hex":"#%02x%02x%02x","r":%d,"g":%d,"b":%d,"rgb":"rgb(%d, %d, %d)"}' % (r, g, bl, r, g, bl, r, g, bl))
+PY
 }
 
 kmeans_from_ppm() {
@@ -99,7 +211,7 @@ random.seed(42)
 p=sys.argv[1]
 b=open(p,'rb').read()
 if not b.startswith(b'P6'):
-    print('["#000000"]'); sys.exit(0)
+    sys.exit(1)
 lines=b.split(b'\n')
 # crude header skip
 idx=0
@@ -130,7 +242,7 @@ for i in range(0, w*h, step):
     if o+2>=len(data): break
     samples.append((data[o], data[o+1], data[o+2]))
 if not samples:
-    print('["#000000"]'); sys.exit(0)
+    sys.exit(1)
 k=min(6,len(samples))
 centers=random.sample(samples,k)
 for _ in range(8):
@@ -214,8 +326,8 @@ handle() {
   case "$cmd" in
     hello|capabilities|"") hello ;;
     cursor)
-      CX=$(printf '%s' "$line" | sed -n 's/.*"x"[[:space:]]*:[[:space:]]*\([0-9.]*\).*/\1/p')
-      CY=$(printf '%s' "$line" | sed -n 's/.*"y"[[:space:]]*:[[:space:]]*\([0-9.]*\).*/\1/p')
+      CX=$(printf '%s' "$line" | sed -n 's/.*"x"[[:space:]]*:[[:space:]]*\(-\{0,1\}[0-9.][0-9.]*\).*/\1/p')
+      CY=$(printf '%s' "$line" | sed -n 's/.*"y"[[:space:]]*:[[:space:]]*\(-\{0,1\}[0-9.][0-9.]*\).*/\1/p')
       emit "{\"ok\":true,\"event\":\"cursor\",\"x\":${CX:-0},\"y\":${CY:-0}}"
       ;;
     start_stream)
@@ -228,11 +340,14 @@ handle() {
       geom=$(region_geom "${CX%.*}" "${CY%.*}")
       ppm="$SHM/shot.ppm"
       if grim_ppm "$geom" "$ppm"; then
-        pix=$(pixel_from_ppm "$ppm")
-        path=$(copy_png_slot "$ppm")
-        hex=$(printf '%s' "$pix" | sed -n 's/.*"hex":"\([^"]*\)".*/"\1"/p')
-        emit "{\"ok\":true,\"event\":\"pick\",\"pixel\":$pix,\"hex\":$hex}"
-        emit_frame "$path" "$pix"
+        if ! pix=$(pixel_from_ppm "$ppm"); then
+          emit '{"ok":false,"event":"error","error":"could not parse captured pixel"}'
+        else
+          path=$(copy_png_slot "$ppm")
+          hex=$(printf '%s' "$pix" | sed -n 's/.*"hex":"\([^"]*\)".*/"\1"/p')
+          emit "{\"ok\":true,\"event\":\"pick\",\"pixel\":$pix,\"hex\":$hex}"
+          emit_frame "$path" "$pix"
+        fi
       else
         emit '{"ok":false,"event":"error","error":"grim capture failed (is grim installed?)"}'
       fi
@@ -241,9 +356,12 @@ handle() {
       geom=$(region_geom "${CX%.*}" "${CY%.*}")
       ppm="$SHM/shot.ppm"
       if grim_ppm "$geom" "$ppm"; then
-        pix=$(pixel_from_ppm "$ppm")
-        path=$(copy_png_slot "$ppm")
-        emit_frame "$path" "$pix"
+        if ! pix=$(pixel_from_ppm "$ppm"); then
+          emit '{"ok":false,"event":"error","error":"could not parse captured pixel"}'
+        else
+          path=$(copy_png_slot "$ppm")
+          emit_frame "$path" "$pix"
+        fi
       else
         emit '{"ok":false,"event":"error","error":"grim capture failed (is grim installed?)"}'
       fi
@@ -252,10 +370,13 @@ handle() {
       geom=$(region_geom "${CX%.*}" "${CY%.*}")
       ppm="$SHM/shot.ppm"
       if grim_ppm "$geom" "$ppm"; then
-        pix=$(pixel_from_ppm "$ppm")
-        path=$(copy_png_slot "$ppm")
-        emit_frame "$path" "$pix"
-        emit '{"ok":true,"event":"frozen","factor":8}'
+        if ! pix=$(pixel_from_ppm "$ppm"); then
+          emit '{"ok":false,"event":"error","error":"could not parse captured pixel"}'
+        else
+          path=$(copy_png_slot "$ppm")
+          emit_frame "$path" "$pix"
+          emit '{"ok":true,"event":"frozen","factor":8}'
+        fi
       else
         emit '{"ok":false,"event":"error","error":"grim capture failed (is grim installed?)"}'
       fi
@@ -264,22 +385,36 @@ handle() {
       source=$(json_field "$line" source)
       [ -n "$source" ] || source=window
       geom=""
+      output=""
       if [ "$source" = "window" ]; then
         geom=$(window_geom || true)
       fi
-      if [ -z "$geom" ] && [ "$source" = "monitor" ]; then
-        geom=""
+      info=$(focused_monitor || true)
+      if [ -n "$info" ]; then
+        output=$(printf '%s' "$info" | cut -f1)
+        mgeom=$(printf '%s' "$info" | cut -f2)
+      else
+        mgeom=""
+      fi
+      if [ "$source" = "monitor" ]; then
+        geom=$mgeom
+      elif [ -z "$geom" ]; then
+        geom=$mgeom
       fi
       ppm="$SHM/shot.ppm"
       captured=false
-      if [ -n "$geom" ]; then
-        grim_ppm "$geom" "$ppm" && captured=true
+      if [ "$source" = "monitor" ] && [ -n "$output" ]; then
+        grim_ppm "output" "$ppm" "$output" && captured=true
       fi
-      if [ "$captured" = false ]; then
-        grim_ppm "full" "$ppm" && captured=true
+      if [ "$captured" = false ] && [ -n "$geom" ]; then
+        if [ "$source" = "monitor" ]; then
+          grim_ppm "$geom" "$ppm" "$output" && captured=true
+        else
+          grim_ppm "$geom" "$ppm" && captured=true
+        fi
       fi
       if [ "$captured" != true ]; then
-        emit '{"ok":false,"event":"error","error":"grim capture failed"}'
+        emit '{"ok":false,"event":"error","error":"grim capture failed (no focused monitor)"}'
       elif [ "${CHROMA_NO_PYTHON:-}" = "1" ] || ! have python3; then
         emit '{"ok":false,"event":"error","error":"palette extraction needs python3 (grim fallback) or chromad"}'
       elif ! cols=$(kmeans_from_ppm "$ppm"); then
@@ -342,10 +477,13 @@ handle() {
 case "${1:-}" in
   --serve)
     hello
-    while IFS= read -r line; do
+    while [ "$STOP" -eq 0 ]; do
+      IFS= read -r line || break
+      [ "$STOP" -eq 0 ] || break
       [ -n "$line" ] || continue
       handle "$line"
     done
+    exit 0
     ;;
   --capabilities)
     hello

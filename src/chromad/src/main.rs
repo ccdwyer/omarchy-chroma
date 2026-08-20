@@ -189,8 +189,7 @@ impl Server {
     }
 
     fn capture_mapped(&mut self, mapped: &coords::MappedCapture, live: bool) -> Result<Frame, String> {
-        self.capturer
-            .capture_on(&mapped.output, mapped.physical, live)
+        self.capturer.capture_on(mapped, live)
     }
 
     fn capture_live(&mut self) -> Result<Frame, String> {

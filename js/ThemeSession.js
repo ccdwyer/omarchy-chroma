@@ -18,7 +18,14 @@ function beginPreview(currentName, alreadyLive) {
     var name = String(currentName || "").trim()
     if (name && name !== "chroma-preview")
         original = name
+    else
+        original = ""
     return original
+}
+
+function hasRevertTarget() {
+    var name = String(original || "").trim()
+    return !!(name && name !== "chroma-preview")
 }
 
 function markApplied() {

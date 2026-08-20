@@ -127,6 +127,12 @@ impl WaylandCapture {
             ext_pending: None,
         };
         queue.roundtrip(&mut state).map_err(|e| e.to_string())?;
+        // Output name/geometry/mode arrive after the registry bind; one more
+        // roundtrip is required before names can be resolved.
+        queue.roundtrip(&mut state).map_err(|e| e.to_string())?;
+        if state.outputs.iter().any(|o| o.width <= 0) {
+            queue.roundtrip(&mut state).map_err(|e| e.to_string())?;
+        }
         if state.shm.is_none() {
             return Err("wl_shm missing".into());
         }
@@ -152,15 +158,18 @@ impl WaylandCapture {
         self.state.screencopy.is_some()
     }
 
-    fn output_named(&self, name: &str) -> Option<&OutputInfo> {
+    fn output_named(&self, name: &str) -> Result<&OutputInfo, String> {
+        if name.is_empty() {
+            return Err("unresolved output name".into());
+        }
         self.state
             .outputs
             .iter()
             .find(|o| o.name == name)
-            .or(self.state.outputs.first())
+            .ok_or_else(|| format!("output {name} missing"))
     }
 
-    fn output_for_rect(&self, rect: Rect) -> Option<&OutputInfo> {
+    fn output_for_rect(&self, rect: Rect) -> Result<&OutputInfo, String> {
         self.state
             .outputs
             .iter()
@@ -170,14 +179,11 @@ impl WaylandCapture {
                     && rect.x < o.x + o.width.max(1)
                     && rect.y < o.y + o.height.max(1)
             })
-            .or(self.state.outputs.first())
+            .ok_or_else(|| "no wl_output contains capture rect".into())
     }
 
     pub fn capture_region(&mut self, rect: Rect, prefer_ext: bool) -> Result<Frame, String> {
-        let name = self
-            .output_for_rect(rect)
-            .map(|o| o.name.clone())
-            .unwrap_or_default();
+        let name = self.output_for_rect(rect)?.name.clone();
         self.capture_output(&name, rect, prefer_ext)
     }
 
@@ -234,13 +240,9 @@ impl WaylandCapture {
             .as_ref()
             .ok_or_else(|| "ext_output_image_capture_source_manager_v1 missing".to_string())?
             .clone();
-        let output = self
-            .output_named(name)
-            .ok_or_else(|| format!("output {name} missing"))?
-            .output
-            .clone();
-        let local_x = rect.x.max(0);
-        let local_y = rect.y.max(0);
+        let output = self.output_named(name)?.output.clone();
+        let local_x = rect.x;
+        let local_y = rect.y;
 
         self.state.ext_pending = Some(ExtPending {
             width: 0,
@@ -377,13 +379,9 @@ impl WaylandCapture {
             .as_ref()
             .ok_or_else(|| "zwlr_screencopy_manager_v1 missing".to_string())?
             .clone();
-        let output = self
-            .output_named(name)
-            .ok_or_else(|| format!("output {name} missing"))?
-            .output
-            .clone();
-        let local_x = rect.x.max(0);
-        let local_y = rect.y.max(0);
+        let output = self.output_named(name)?.output.clone();
+        let local_x = rect.x;
+        let local_y = rect.y;
         self.state.pending = Some(PendingFrame {
             width: 0,
             height: 0,
