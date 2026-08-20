@@ -1,0 +1,7 @@
+/src/chromad/target/
+/bin/chromad
+/bin/chromad-*
+**/*.rs.bk
+.DS_Store
+.impl_prompt.md
+.grok_impl.log

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.chris.chroma",
+  "name": "Chroma",
+  "version": "1.0.0",
+  "author": "chris",
+  "license": "MIT",
+  "description": "Zoom loupe, color picker, palette-to-theme, WCAG contrast, pixel ruler, OCR and QR — one screen lens, theme-native.",
+  "kinds": ["bar-widget", "overlay"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "barWidget": "BarWidget.qml",
+    "overlay": "Overlay.qml"
+  },
+  "barWidget": {
+    "displayName": "Chroma",
+    "category": "Color",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "loupeOffset": 60,
+      "historyLimit": 24,
+      "zoomDefault": 4
+    },
+    "schema": [
+      { "key": "loupeOffset", "type": "int", "label": "Loupe offset (px)" },
+      { "key": "historyLimit", "type": "int", "label": "Pick history size" },
+      { "key": "zoomDefault", "type": "int", "label": "Default freeze zoom" }
+    ]
+  }
+}

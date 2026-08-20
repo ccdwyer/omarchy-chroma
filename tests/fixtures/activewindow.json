@@ -1,0 +1,12 @@
+{
+  "address": "0x1234",
+  "mapped": true,
+  "hidden": false,
+  "at": [400, 200],
+  "size": [2200, 800],
+  "workspace": { "id": 1, "name": "1" },
+  "floating": false,
+  "monitor": 0,
+  "class": "firefox",
+  "title": "photo"
+}

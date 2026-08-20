@@ -1,0 +1,13 @@
+[
+  {
+    "id": 0,
+    "name": "eDP-1",
+    "x": 0,
+    "y": 0,
+    "width": 2560,
+    "height": 1600,
+    "scale": 2,
+    "transform": 0,
+    "focused": true
+  }
+]
