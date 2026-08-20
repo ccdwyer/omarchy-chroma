@@ -32,7 +32,7 @@ Conservative choices where the Omarchy / Quickshell / Hyprland API was not 100% 
 
 - **Do not assume `omarchy theme set`.** Apply is `omarchy-theme-set <name>` — the script the desktop actually runs (writes `current/theme`, `theme.name`, templates, restarts). Fallback is not invented.
 - Preview directory is `~/.config/omarchy/themes/chroma-preview/` with `colors.toml` (required keys matching shipped tokyo-night / catppuccin) plus minimal `hyprland.conf` / `alacritty.toml` if templates are absent.
-- Transaction: snapshot `theme.name` → write files → `theme_valid` from chromad (or local JS validate if chromad is down) → `omarchy-theme-set chroma-preview` → **`themeLive` (revert UI) only if that process exits 0**. Failure leaves `themeLive` false. Revert waits for `omarchy-theme-set <original>` exit 0 before clearing `themeLive`.
+- Transaction: when `themeLive` is false, snapshot `theme.name` at the start of **every** preview (overwrite the session record; never skip because a previous original is still in memory). Then write files → `theme_valid` → `omarchy-theme-set chroma-preview` → **`themeLive` only if that process exits 0**. A successful revert clears `originalTheme` and the session file so the next preview cannot restore a stale theme. Mapping lives in `js/ThemeSession.js`.
 - Mapping: darkest → background, contrast-fixed lightest → foreground, highest chroma among remaining → accent. Validated against tokyo-night and catppuccin **token files** off-device (not a live apply).
 
 ## Quickshell types actually used
@@ -45,7 +45,9 @@ Clipboard is `wl-copy` via `Process`, not an undocumented `Quickshell.clipboard`
 
 ## Helper fallback
 
-Missing `bin/chromad` → `compat/chromad.sh` (grim oneshots + python3 k-means if present). Palette from `source=window` parses `hyprctl -j activewindow` ∩ focused monitor and passes that geometry to grim. `freeze` emits `frame` + `frozen` only (never a `pick`). Frame dirs are removed on EXIT/INT/TERM (shell trap) and on chromad quit/SIGINT/SIGTERM/atexit. Core picker/palette/theme survive with zero Rust binary. OCR/QR hide when `tesseract` / `zbarimg` are absent.
+Missing `bin/chromad` → `compat/chromad.sh` (grim oneshots). Palette from `source=window` parses `hyprctl -j activewindow` ∩ focused monitor and passes that geometry to grim. Without python3, palette returns an **error** (no invented swatches). `freeze` emits `frame` + `frozen` only. Frame dirs are removed on the serve loop’s normal shutdown: SIGINT/SIGTERM set an atomic flag only; cleanup is `remove_dir_all` after the loop (not in the signal handler). OCR/QR hide when `tesseract` / `zbarimg` are absent.
+
+Linux prebuilts: `scripts/fetch-prebuilts.sh` keeps the published asset filename, verifies it against `SHA256SUMS` (fail closed), then installs as `bin/chromad`.
 
 ## Review artifacts
 

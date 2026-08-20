@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -79,10 +80,11 @@ fn shm_dir() -> PathBuf {
 }
 
 static SHM_PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+static STOP: AtomicBool = AtomicBool::new(false);
 
 fn remember_shm(dir: PathBuf) {
     let _ = SHM_PATH.set(dir);
-    install_shm_signals();
+    install_stop_signals();
 }
 
 fn remove_shm() {
@@ -91,27 +93,29 @@ fn remove_shm() {
     }
 }
 
+fn stop_requested() -> bool {
+    STOP.load(Ordering::SeqCst)
+}
+
+fn request_stop() {
+    STOP.store(true, Ordering::SeqCst);
+}
+
+// Signal handler only flips a flag. Filesystem cleanup runs on the serve loop.
 #[cfg(unix)]
-fn install_shm_signals() {
+fn install_stop_signals() {
     unsafe {
-        libc::signal(libc::SIGINT, shm_signal as *const () as libc::sighandler_t);
-        libc::signal(libc::SIGTERM, shm_signal as *const () as libc::sighandler_t);
-        let _ = libc::atexit(shm_atexit);
+        libc::signal(libc::SIGINT, stop_signal as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGTERM, stop_signal as *const () as libc::sighandler_t);
     }
 }
 
 #[cfg(not(unix))]
-fn install_shm_signals() {}
+fn install_stop_signals() {}
 
 #[cfg(unix)]
-extern "C" fn shm_signal(_: i32) {
-    remove_shm();
-    unsafe { libc::_exit(0) }
-}
-
-#[cfg(unix)]
-extern "C" fn shm_atexit() {
-    remove_shm();
+extern "C" fn stop_signal(_: i32) {
+    request_stop();
 }
 
 struct Server {
@@ -412,9 +416,7 @@ impl Server {
                 }
             }
             "quit" => {
-                emit(json!({"ok": true, "event": "bye"}));
-                remove_shm();
-                std::process::exit(0);
+                request_stop();
             }
             other => fail(&format!("unknown cmd {other}")),
         }
@@ -463,6 +465,9 @@ fn serve() {
     let interval = Duration::from_millis(1000 / STREAM_HZ);
     let mut last = Instant::now();
     loop {
+        if stop_requested() {
+            break;
+        }
         while let Ok(line) = rx.try_recv() {
             let line = line.trim();
             if line.is_empty() {
@@ -472,6 +477,12 @@ fn serve() {
                 Ok(cmd) => server.handle(cmd),
                 Err(e) => fail(&e.to_string()),
             }
+            if stop_requested() {
+                break;
+            }
+        }
+        if stop_requested() {
+            break;
         }
         if last.elapsed() >= interval {
             server.tick_stream();
@@ -479,6 +490,8 @@ fn serve() {
         }
         std::thread::sleep(Duration::from_millis(2));
     }
+    emit(json!({"ok": true, "event": "bye"}));
+    remove_shm();
 }
 
 fn print_help() {

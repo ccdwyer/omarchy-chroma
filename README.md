@@ -66,7 +66,7 @@ Right-click the bar chip opens the lens on the history strip. Overlay chrome use
 1. Snapshots `~/.config/omarchy/current/theme.name`
 2. Writes `~/.config/omarchy/themes/chroma-preview/{colors.toml,hyprland.conf,alacritty.toml}`
 3. Validates `colors.toml` (`theme_valid`) **then** runs **`omarchy-theme-set chroma-preview`**
-4. Sets revert (`u`) live **only after that process exits 0**
+4. Sets revert (`u`) live **only after that process exits 0**. A successful revert clears the snapshotted theme so the next preview cannot restore a stale name.
 
 `omarchy-theme-set` copies the theme into `current/theme` and runs `omarchy-theme-set-templates`, so a `colors.toml` is enough for the rest of the desktop. The extra hyprland/alacritty files are a fallback if templates are missing.
 
@@ -124,6 +124,7 @@ node tests/run.js
 cargo test --manifest-path src/chromad/Cargo.toml
 sh tests/cli.test.sh
 sh tests/compat-protocol.test.sh
+sh tests/fetch-prebuilts.test.sh
 ```
 
 ## Remove

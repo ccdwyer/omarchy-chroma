@@ -50,10 +50,26 @@ else
   ok "shm dir removed on quit"
 fi
 
+: > "$LOG"
+out=$(CHROMA_NO_PYTHON=1 serve '{"cmd":"palette","source":"window"}' '{"cmd":"quit"}')
+if printf '%s' "$out" | grep -q '"event":"error"' && printf '%s' "$out" | grep -q 'python3'; then
+  ok "palette without python reports degraded capability"
+else
+  bad "no-python palette: $out"
+fi
+if printf '%s' "$out" | grep -q '#111111'; then
+  bad "palette without python must not invent a synthetic palette"
+else
+  ok "palette without python has no synthetic swatches"
+fi
+
 # Overlay root methods (shell call contract)
 for fn in "function pick(arg)" "function palette(arg)" "function revert(arg)" "function status(arg)"; do
   grep -q "$fn" "$ROOT/Overlay.qml" && ok "Overlay root $fn" || bad "missing Overlay $fn"
 done
+
+grep -q 'if (!root.themeLive)' "$ROOT/Overlay.qml" && ok "preview snapshots when not live" || bad "missing themeLive snapshot"
+grep -q 'clearThemeSession' "$ROOT/Overlay.qml" && ok "revert clears theme session" || bad "missing clearThemeSession"
 
 printf '%s\n' "$fail failed"
 [ "$fail" -eq 0 ]

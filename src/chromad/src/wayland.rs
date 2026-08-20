@@ -33,11 +33,43 @@ struct OutputInfo {
 struct ShmBuffer {
     _file: OwnedFd,
     map: MmapMut,
+    pool: wl_shm_pool::WlShmPool,
     buffer: wl_buffer::WlBuffer,
     width: i32,
     height: i32,
     stride: i32,
     format: u32,
+}
+
+impl ShmBuffer {
+    fn destroy(self) {
+        self.buffer.destroy();
+        self.pool.destroy();
+    }
+}
+
+struct ExtGuards {
+    source: Option<ext_image_capture_source_v1::ExtImageCaptureSourceV1>,
+    session: Option<ext_image_copy_capture_session_v1::ExtImageCopyCaptureSessionV1>,
+    frame: Option<ext_image_copy_capture_frame_v1::ExtImageCopyCaptureFrameV1>,
+    shm: Option<ShmBuffer>,
+}
+
+impl Drop for ExtGuards {
+    fn drop(&mut self) {
+        if let Some(frame) = self.frame.take() {
+            frame.destroy();
+        }
+        if let Some(session) = self.session.take() {
+            session.destroy();
+        }
+        if let Some(source) = self.source.take() {
+            source.destroy();
+        }
+        if let Some(shm) = self.shm.take() {
+            shm.destroy();
+        }
+    }
 }
 
 struct PendingFrame {
@@ -226,6 +258,12 @@ impl WaylandCapture {
             &self.qh,
             (),
         );
+        let mut guards = ExtGuards {
+            source: Some(source),
+            session: Some(session),
+            frame: None,
+            shm: None,
+        };
         let mut spins = 0;
         while spins < 48 {
             self.queue
@@ -270,9 +308,15 @@ impl WaylandCapture {
             p.ready = false;
             p.failed = false;
         }
-        let frame = session.create_frame(&self.qh, ());
+        let frame = guards
+            .session
+            .as_ref()
+            .ok_or_else(|| "ext session missing".to_string())?
+            .create_frame(&self.qh, ());
         frame.attach_buffer(&shm_buf.buffer);
         frame.capture();
+        guards.frame = Some(frame);
+        guards.shm = Some(shm_buf);
         spins = 0;
         while spins < 48 {
             self.queue
@@ -307,7 +351,11 @@ impl WaylandCapture {
         {
             return Err("ext-image-copy-capture timed out".into());
         }
-        let rgba = shm_to_rgba(&shm_buf)?;
+        let shm_ref = guards
+            .shm
+            .as_ref()
+            .ok_or_else(|| "ext shm buffer missing".to_string())?;
+        let rgba = shm_to_rgba(shm_ref)?;
         let full = Frame {
             width: width as u32,
             height: height as u32,
@@ -316,6 +364,7 @@ impl WaylandCapture {
         let local_x = (rect.x - out_x).max(0);
         let local_y = (rect.y - out_y).max(0);
         let _ = self.conn;
+        drop(guards);
         if local_x == 0 && local_y == 0 && rect.w >= width && rect.h >= height {
             Ok(full)
         } else {
@@ -360,6 +409,7 @@ impl WaylandCapture {
         self.queue
             .roundtrip(&mut self.state)
             .map_err(|e| e.to_string())?;
+        _probe.destroy();
         let (width, height, stride, format) = {
             let p = self
                 .state
@@ -405,19 +455,29 @@ impl WaylandCapture {
             failed: false,
         });
         let mut spins = 0;
+        let mut copy_err: Option<String> = None;
         while spins < 32 {
-            self.queue
-                .roundtrip(&mut self.state)
-                .map_err(|e| e.to_string())?;
+            if let Err(e) = self.queue.roundtrip(&mut self.state) {
+                copy_err = Some(e.to_string());
+                break;
+            }
             if self.state.pending.as_ref().map(|p| p.failed).unwrap_or(false) {
-                return Err("screencopy copy failed".into());
+                copy_err = Some("screencopy copy failed".into());
+                break;
             }
             if self.state.pending.as_ref().map(|p| p.ready).unwrap_or(false) {
                 break;
             }
             spins += 1;
         }
+        if let Some(e) = copy_err {
+            frame.destroy();
+            shm_buf.destroy();
+            return Err(e);
+        }
         let rgba = shm_to_rgba(&shm_buf)?;
+        frame.destroy();
+        shm_buf.destroy();
         Ok(Frame {
             width: width as u32,
             height: height as u32,
@@ -463,6 +523,7 @@ fn make_shm_buffer(
     Ok(ShmBuffer {
         _file: fd,
         map,
+        pool,
         buffer,
         width,
         height,

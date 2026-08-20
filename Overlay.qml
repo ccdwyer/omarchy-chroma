@@ -6,6 +6,7 @@ import qs.Commons
 import qs.Ui
 import "js/Color.js" as ColorMath
 import "js/Theme.js" as Theme
+import "js/ThemeSession.js" as ThemeSession
 import "js/History.js" as History
 import "js/Capture.js" as Capture
 import "qml"
@@ -240,7 +241,7 @@ Item {
       root.toast = "theme invalid: " + check.error
       return
     }
-    if (!root.originalTheme)
+    if (!root.themeLive)
       root.snapshotTheme()
     writeThemeProc.running = false
     writeThemeProc.command = [
@@ -256,13 +257,23 @@ Item {
   }
 
   function snapshotTheme() {
+    try {
+      themeNameFile.reload()
+    } catch (e) {}
     var name = ""
     try {
       name = String(themeNameFile.text() || "").trim()
-    } catch (e) {}
-    if (name && name !== "chroma-preview")
-      root.originalTheme = name
-    sessionFile.setText(JSON.stringify({ original: root.originalTheme, at: Date.now() }))
+    } catch (e2) {}
+    ThemeSession.beginPreview(name, root.themeLive)
+    root.originalTheme = ThemeSession.snapshot().original
+    sessionFile.setText(ThemeSession.serialize())
+  }
+
+  function clearThemeSession() {
+    ThemeSession.afterSuccessfulRevert()
+    root.originalTheme = ""
+    root.themeLive = false
+    sessionFile.setText(ThemeSession.serialize())
   }
 
   function applyPreview() {
@@ -456,9 +467,12 @@ Item {
       root.themeSetErr = ""
       if (name === "chroma-preview") {
         if (code === 0) {
+          ThemeSession.markApplied()
           root.themeLive = true
+          sessionFile.setText(ThemeSession.serialize())
           root.toast = "chroma-preview applied — u to revert"
         } else {
+          ThemeSession.markApplyFailed()
           root.themeLive = false
           root.toast = err.length ? err : ("omarchy-theme-set failed (" + code + ")")
         }
@@ -466,7 +480,7 @@ Item {
       }
       if (name && name !== "chroma-preview") {
         if (code === 0) {
-          root.themeLive = false
+          root.clearThemeSession()
           root.toast = "reverted to " + name
         } else {
           root.toast = err.length ? err : ("revert failed (" + code + ")")
@@ -491,11 +505,14 @@ Item {
     atomicWrites: true
     printErrors: false
     onLoaded: {
-      try {
-        var raw = JSON.parse(text() || "{}")
-        if (raw.original)
-          root.originalTheme = raw.original
-      } catch (e) {}
+      ThemeSession.load(text() || "{}")
+      root.originalTheme = ThemeSession.snapshot().original
+      if (ThemeSession.snapshot().live)
+        root.themeLive = true
+    }
+    onLoadFailed: {
+      ThemeSession.reset()
+      root.originalTheme = ""
     }
   }
 

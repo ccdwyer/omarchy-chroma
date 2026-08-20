@@ -90,7 +90,10 @@ awk_pixel() {
 
 kmeans_from_ppm() {
   file=$1
-  python3 - "$file" <<'PY' 2>/dev/null || echo '["#111111","#eeeeee","#cc3333","#33aa66","#3366cc","#d4a017"]'
+  if [ "${CHROMA_NO_PYTHON:-}" = "1" ] || ! have python3; then
+    return 1
+  fi
+  python3 - "$file" <<'PY' || return 1
 import sys, struct, collections, random
 random.seed(42)
 p=sys.argv[1]
@@ -275,11 +278,14 @@ handle() {
       if [ "$captured" = false ]; then
         grim_ppm "full" "$ppm" && captured=true
       fi
-      if [ "$captured" = true ]; then
-        cols=$(kmeans_from_ppm "$ppm")
-        emit "{\"ok\":true,\"event\":\"palette\",\"source\":\"$source\",\"colors\":$cols}"
-      else
+      if [ "$captured" != true ]; then
         emit '{"ok":false,"event":"error","error":"grim capture failed"}'
+      elif [ "${CHROMA_NO_PYTHON:-}" = "1" ] || ! have python3; then
+        emit '{"ok":false,"event":"error","error":"palette extraction needs python3 (grim fallback) or chromad"}'
+      elif ! cols=$(kmeans_from_ppm "$ppm"); then
+        emit '{"ok":false,"event":"error","error":"palette extraction failed"}'
+      else
+        emit "{\"ok\":true,\"event\":\"palette\",\"source\":\"$source\",\"colors\":$cols}"
       fi
       ;;
     ocr)

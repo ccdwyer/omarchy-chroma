@@ -66,6 +66,7 @@ const Color = loadEngine("Color.js")
 const Theme = loadEngine("Theme.js", { Color })
 const History = loadEngine("History.js")
 const Capture = loadEngine("Capture.js")
+const ThemeSession = loadEngine("ThemeSession.js")
 
 let passed = 0
 let failed = 0
@@ -73,6 +74,7 @@ let failed = 0
 function test(name, fn) {
   try {
     History.reset()
+    ThemeSession.reset()
     fn()
     passed += 1
     process.stdout.write("ok  " + name + "\n")
@@ -191,6 +193,24 @@ test("theme: mapping a tokyo-night-like palette keeps a dark bg and the highest-
   assert.ok(Color.chromaOf(mapped.roles.accent) >= Color.chromaOf("#7aa2f7") - 0.001)
   assert.ok(mapped.contrast.ratio >= 4.5)
   assert.strictEqual(Theme.validateTokens(mapped.tokens).ok, true)
+})
+
+test("theme session: snapshot on every preview while not live", () => {
+  ThemeSession.beginPreview("tokyo-night", false)
+  assert.strictEqual(ThemeSession.snapshot().original, "tokyo-night")
+  ThemeSession.markApplied()
+  ThemeSession.beginPreview("chroma-preview", true)
+  assert.strictEqual(ThemeSession.snapshot().original, "tokyo-night")
+  ThemeSession.afterSuccessfulRevert()
+  assert.strictEqual(ThemeSession.snapshot().original, "")
+  assert.strictEqual(ThemeSession.snapshot().live, false)
+  ThemeSession.beginPreview("catppuccin", false)
+  assert.strictEqual(ThemeSession.snapshot().original, "catppuccin")
+})
+
+test("theme session: never records chroma-preview as the revert target", () => {
+  ThemeSession.beginPreview("chroma-preview", false)
+  assert.strictEqual(ThemeSession.snapshot().original, "")
 })
 
 test("theme: mapping a catppuccin-like palette keeps mocha-dark background", () => {

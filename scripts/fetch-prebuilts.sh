@@ -1,13 +1,47 @@
 #!/bin/sh
 # Download CI-built Linux chromad binaries from GitHub Releases into bin/.
-# Usage: scripts/fetch-prebuilts.sh [owner/repo] [tag]
+# Usage:
+#   scripts/fetch-prebuilts.sh [owner/repo] [tag]
+#   scripts/fetch-prebuilts.sh --verify <dir> <asset-name>
 # Default repo is inferred from `git remote get-url origin`.
+# Checksums are verified against the published asset filename BEFORE install.
 
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 OUT="$ROOT/bin"
 mkdir -p "$OUT"
+
+hash_check() {
+  dir=$1
+  asset=$2
+  sums="$dir/SHA256SUMS"
+  if [ ! -f "$sums" ]; then
+    echo "fetch-prebuilts.sh: SHA256SUMS missing" >&2
+    return 1
+  fi
+  if [ ! -f "$dir/$asset" ]; then
+    echo "fetch-prebuilts.sh: asset $asset missing" >&2
+    return 1
+  fi
+  if ! grep -E "[ *]$asset\$" "$sums" >/dev/null; then
+    echo "fetch-prebuilts.sh: SHA256SUMS has no line for $asset" >&2
+    return 1
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    (cd "$dir" && grep -E "[ *]$asset\$" SHA256SUMS | sha256sum -c -)
+  elif command -v shasum >/dev/null 2>&1; then
+    (cd "$dir" && grep -E "[ *]$asset\$" SHA256SUMS | shasum -a 256 -c -)
+  else
+    echo "fetch-prebuilts.sh: need sha256sum or shasum" >&2
+    return 1
+  fi
+}
+
+if [ "${1:-}" = "--verify" ]; then
+  hash_check "${2:?dir}" "${3:?asset}"
+  exit $?
+fi
 
 repo=${1:-}
 tag=${2:-latest}
@@ -37,19 +71,30 @@ else
 fi
 
 echo "fetch-prebuilts.sh: $api/$asset"
-tmp=$(mktemp)
-trap 'rm -f "$tmp"' EXIT
-if command -v curl >/dev/null 2>&1; then
-  curl -fsSL "$api/$asset" -o "$tmp"
-  curl -fsSL "$api/SHA256SUMS" -o "$OUT/SHA256SUMS" || true
-else
-  wget -q "$api/$asset" -O "$tmp"
-  wget -q "$api/SHA256SUMS" -O "$OUT/SHA256SUMS" || true
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+download() {
+  src=$1
+  dest=$2
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$src" -o "$dest"
+  else
+    wget -q "$src" -O "$dest"
+  fi
+}
+
+download "$api/SHA256SUMS" "$work/SHA256SUMS"
+download "$api/$asset" "$work/$asset"
+
+if ! hash_check "$work" "$asset"; then
+  echo "fetch-prebuilts.sh: checksum failed; not installing" >&2
+  exit 1
 fi
-chmod +x "$tmp"
-mv "$tmp" "$OUT/chromad"
+
+chmod +x "$work/$asset"
+cp "$work/SHA256SUMS" "$OUT/SHA256SUMS"
+mv "$work/$asset" "$OUT/chromad"
 trap - EXIT
-echo "fetch-prebuilts.sh: wrote $OUT/chromad"
-if [ -f "$OUT/SHA256SUMS" ] && command -v sha256sum >/dev/null 2>&1; then
-  (cd "$OUT" && sha256sum -c SHA256SUMS --ignore-missing) || echo "fetch-prebuilts.sh: checksum file present; verify on Linux" >&2
-fi
+rm -rf "$work"
+echo "fetch-prebuilts.sh: verified $asset → $OUT/chromad"
