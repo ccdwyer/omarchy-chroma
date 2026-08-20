@@ -34,6 +34,8 @@ Item {
   signal ocrText(string text)
   signal qrText(string text)
   signal failed(string error)
+  signal themeValidated(bool ok)
+  signal frozen(var msg)
 
   readonly property string binPath: pluginDir + "/bin/chromad"
   readonly property string compatPath: pluginDir + "/compat/chromad.sh"
@@ -79,12 +81,16 @@ Item {
     var msg = Capture.parseJsonLine(line)
     if (!msg)
       return
+    var ev = msg.event || ""
+    if (ev === "theme_valid") {
+      root.themeValidated(msg.ok === true)
+      return
+    }
     if (msg.ok === false) {
       root.lastError = msg.error || "chromad error"
       root.failed(root.lastError)
       return
     }
-    var ev = msg.event || ""
     if (ev === "hello") {
       var cap = Capture.capabilitiesFromHello(msg)
       root.backend = cap.backend
@@ -119,6 +125,8 @@ Item {
     } else if (ev === "stream") {
       if (msg.pickMode === true)
         root.pickMode = true
+    } else if (ev === "frozen") {
+      root.frozen(msg)
     }
   }
 

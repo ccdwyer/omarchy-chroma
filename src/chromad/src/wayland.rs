@@ -1,5 +1,5 @@
-//! Linux-only capture via ext-image-copy-capture-v1, then wlr-screencopy.
-//! overlay_cursor is always 0 so the cursor sprite is not in the sample.
+//! Linux-only capture: ext-image-copy-capture-v1, then wlr-screencopy.
+//! Cursor is never composited (ext options empty / wlr overlay_cursor=0).
 
 #![cfg(target_os = "linux")]
 
@@ -8,22 +8,17 @@ use crate::ppm::Frame;
 use memmap2::MmapMut;
 use rustix::fs::{memfd_create, MemfdFlags};
 use std::os::fd::{AsFd, OwnedFd};
-use wayland_client::protocol::{
-    wl_buffer, wl_output, wl_registry, wl_shm, wl_shm_pool,
-};
+use wayland_client::protocol::{wl_buffer, wl_output, wl_registry, wl_shm, wl_shm_pool};
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
-use wayland_protocols_wlr::screencopy::v1::client::{
-    zwlr_screencopy_frame_v1, zwlr_screencopy_manager_v1,
-};
-
-#[cfg(feature = "ext-capture")]
 use wayland_protocols::ext::image_capture_source::v1::client::{
     ext_image_capture_source_v1, ext_output_image_capture_source_manager_v1,
 };
-#[cfg(feature = "ext-capture")]
 use wayland_protocols::ext::image_copy_capture::v1::client::{
     ext_image_copy_capture_frame_v1, ext_image_copy_capture_manager_v1,
     ext_image_copy_capture_session_v1,
+};
+use wayland_protocols_wlr::screencopy::v1::client::{
+    zwlr_screencopy_frame_v1, zwlr_screencopy_manager_v1,
 };
 
 struct OutputInfo {
@@ -54,6 +49,15 @@ struct PendingFrame {
     failed: bool,
 }
 
+struct ExtPending {
+    width: i32,
+    height: i32,
+    formats: Vec<u32>,
+    done: bool,
+    ready: bool,
+    failed: bool,
+}
+
 pub struct WaylandCapture {
     conn: Connection,
     qh: QueueHandle<State>,
@@ -67,8 +71,10 @@ struct State {
     shm: Option<wl_shm::WlShm>,
     outputs: Vec<OutputInfo>,
     screencopy: Option<zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1>,
+    ext_mgr: Option<ext_image_copy_capture_manager_v1::ExtImageCopyCaptureManagerV1>,
+    ext_src: Option<ext_output_image_capture_source_manager_v1::ExtOutputImageCaptureSourceManagerV1>,
     pending: Option<PendingFrame>,
-    pixels: Vec<u8>,
+    ext_pending: Option<ExtPending>,
 }
 
 impl WaylandCapture {
@@ -83,19 +89,17 @@ impl WaylandCapture {
             shm: None,
             outputs: Vec::new(),
             screencopy: None,
+            ext_mgr: None,
+            ext_src: None,
             pending: None,
-            pixels: Vec::new(),
+            ext_pending: None,
         };
         queue.roundtrip(&mut state).map_err(|e| e.to_string())?;
         if state.shm.is_none() {
             return Err("wl_shm missing".into());
         }
-        if state.screencopy.is_none()
-            && !state
-                .globals
-                .iter()
-                .any(|g| g == "ext_image_copy_capture_manager_v1")
-        {
+        let has_ext = state.ext_mgr.is_some() && state.ext_src.is_some();
+        if state.screencopy.is_none() && !has_ext {
             return Err("no screencopy global".into());
         }
         let globals = state.globals.clone();
@@ -108,7 +112,15 @@ impl WaylandCapture {
         })
     }
 
-    fn output_for(&self, name: &str) -> Option<&OutputInfo> {
+    pub fn has_ext(&self) -> bool {
+        self.state.ext_mgr.is_some() && self.state.ext_src.is_some()
+    }
+
+    pub fn has_wlr(&self) -> bool {
+        self.state.screencopy.is_some()
+    }
+
+    fn output_named(&self, name: &str) -> Option<&OutputInfo> {
         self.state
             .outputs
             .iter()
@@ -116,38 +128,199 @@ impl WaylandCapture {
             .or(self.state.outputs.first())
     }
 
-    pub fn capture_region(&mut self, rect: Rect, _prefer_ext: bool) -> Result<Frame, String> {
-        self.wlr_region(rect)
+    fn output_for_rect(&self, rect: Rect) -> Option<&OutputInfo> {
+        self.state
+            .outputs
+            .iter()
+            .find(|o| {
+                rect.x >= o.x
+                    && rect.y >= o.y
+                    && rect.x < o.x + o.width.max(1)
+                    && rect.y < o.y + o.height.max(1)
+            })
+            .or(self.state.outputs.first())
     }
 
-    pub fn capture_full(&mut self, _prefer_ext: bool) -> Result<Frame, String> {
+    pub fn capture_region(&mut self, rect: Rect, prefer_ext: bool) -> Result<Frame, String> {
+        let name = self
+            .output_for_rect(rect)
+            .map(|o| o.name.clone())
+            .unwrap_or_default();
+        self.capture_output(&name, rect, prefer_ext)
+    }
+
+    pub fn capture_full(&mut self, prefer_ext: bool) -> Result<Frame, String> {
         let out = self
             .state
             .outputs
             .first()
             .ok_or_else(|| "no wl_output".to_string())?;
+        let name = out.name.clone();
         let rect = Rect {
-            x: 0,
-            y: 0,
+            x: out.x,
+            y: out.y,
             w: out.width.max(1),
             h: out.height.max(1),
         };
-        let name = out.name.clone();
-        self.wlr_output(&name, rect)
+        self.capture_output(&name, rect, prefer_ext)
     }
 
-    pub fn capture_output(&mut self, name: &str, rect: Rect, _prefer_ext: bool) -> Result<Frame, String> {
-        self.wlr_output(name, rect)
+    pub fn capture_output(
+        &mut self,
+        name: &str,
+        rect: Rect,
+        prefer_ext: bool,
+    ) -> Result<Frame, String> {
+        if prefer_ext && self.has_ext() {
+            return self.ext_output(name, rect);
+        }
+        if self.has_wlr() {
+            match self.wlr_output(name, rect) {
+                Ok(f) => return Ok(f),
+                Err(e) if self.has_ext() => {
+                    return self.ext_output(name, rect).map_err(|e2| format!("{e}; ext: {e2}"))
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        if self.has_ext() {
+            return self.ext_output(name, rect);
+        }
+        Err("no wayland capture backend bound".into())
     }
 
-    fn wlr_region(&mut self, rect: Rect) -> Result<Frame, String> {
-        let name = self
+    fn ext_output(&mut self, name: &str, rect: Rect) -> Result<Frame, String> {
+        let mgr = self
             .state
-            .outputs
-            .first()
-            .map(|o| o.name.clone())
-            .unwrap_or_default();
-        self.wlr_output(&name, rect)
+            .ext_mgr
+            .as_ref()
+            .ok_or_else(|| "ext_image_copy_capture_manager_v1 missing".to_string())?
+            .clone();
+        let src_mgr = self
+            .state
+            .ext_src
+            .as_ref()
+            .ok_or_else(|| "ext_output_image_capture_source_manager_v1 missing".to_string())?
+            .clone();
+        let output = self
+            .output_named(name)
+            .ok_or_else(|| format!("output {name} missing"))?
+            .output
+            .clone();
+        let out_x = self.output_named(name).map(|o| o.x).unwrap_or(0);
+        let out_y = self.output_named(name).map(|o| o.y).unwrap_or(0);
+
+        self.state.ext_pending = Some(ExtPending {
+            width: 0,
+            height: 0,
+            formats: Vec::new(),
+            done: false,
+            ready: false,
+            failed: false,
+        });
+        // paint_cursors is unset so the cursor sprite is not in the sample.
+        let source = src_mgr.create_source(&output, &self.qh, ());
+        let session = mgr.create_session(
+            &source,
+            ext_image_copy_capture_manager_v1::Options::empty(),
+            &self.qh,
+            (),
+        );
+        let mut spins = 0;
+        while spins < 48 {
+            self.queue
+                .roundtrip(&mut self.state)
+                .map_err(|e| e.to_string())?;
+            if self
+                .state
+                .ext_pending
+                .as_ref()
+                .map(|p| p.done || p.failed)
+                .unwrap_or(false)
+            {
+                break;
+            }
+            spins += 1;
+        }
+        let (width, height, format) = {
+            let p = self
+                .state
+                .ext_pending
+                .as_ref()
+                .ok_or_else(|| "ext session produced no constraints".to_string())?;
+            if p.failed {
+                return Err("ext-image-copy-capture session failed".into());
+            }
+            if !p.done || p.width <= 0 || p.height <= 0 {
+                return Err("ext-image-copy-capture offered no buffer".into());
+            }
+            let fmt = pick_shm_format(&p.formats);
+            (p.width, p.height, fmt)
+        };
+        let stride = width * 4;
+        let shm_buf = make_shm_buffer(
+            self.state.shm.as_ref().unwrap(),
+            &self.qh,
+            width,
+            height,
+            stride,
+            format,
+        )?;
+        if let Some(p) = self.state.ext_pending.as_mut() {
+            p.ready = false;
+            p.failed = false;
+        }
+        let frame = session.create_frame(&self.qh, ());
+        frame.attach_buffer(&shm_buf.buffer);
+        frame.capture();
+        spins = 0;
+        while spins < 48 {
+            self.queue
+                .roundtrip(&mut self.state)
+                .map_err(|e| e.to_string())?;
+            if self
+                .state
+                .ext_pending
+                .as_ref()
+                .map(|p| p.ready || p.failed)
+                .unwrap_or(false)
+            {
+                break;
+            }
+            spins += 1;
+        }
+        if self
+            .state
+            .ext_pending
+            .as_ref()
+            .map(|p| p.failed)
+            .unwrap_or(false)
+        {
+            return Err("ext-image-copy-capture copy failed".into());
+        }
+        if !self
+            .state
+            .ext_pending
+            .as_ref()
+            .map(|p| p.ready)
+            .unwrap_or(false)
+        {
+            return Err("ext-image-copy-capture timed out".into());
+        }
+        let rgba = shm_to_rgba(&shm_buf)?;
+        let full = Frame {
+            width: width as u32,
+            height: height as u32,
+            rgba,
+        };
+        let local_x = (rect.x - out_x).max(0);
+        let local_y = (rect.y - out_y).max(0);
+        let _ = self.conn;
+        if local_x == 0 && local_y == 0 && rect.w >= width && rect.h >= height {
+            Ok(full)
+        } else {
+            Ok(full.crop(local_x, local_y, rect.w.max(1) as u32, rect.h.max(1) as u32))
+        }
     }
 
     fn wlr_output(&mut self, name: &str, rect: Rect) -> Result<Frame, String> {
@@ -158,12 +331,12 @@ impl WaylandCapture {
             .ok_or_else(|| "zwlr_screencopy_manager_v1 missing".to_string())?
             .clone();
         let output = self
-            .output_for(name)
+            .output_named(name)
             .ok_or_else(|| format!("output {name} missing"))?
             .output
             .clone();
-        let out_x = self.output_for(name).map(|o| o.x).unwrap_or(0);
-        let out_y = self.output_for(name).map(|o| o.y).unwrap_or(0);
+        let out_x = self.output_named(name).map(|o| o.x).unwrap_or(0);
+        let out_y = self.output_named(name).map(|o| o.y).unwrap_or(0);
         let local_x = (rect.x - out_x).max(0);
         let local_y = (rect.y - out_y).max(0);
         self.state.pending = Some(PendingFrame {
@@ -174,7 +347,7 @@ impl WaylandCapture {
             ready: false,
             failed: false,
         });
-        let _frame = manager.capture_output_region(
+        let _probe = manager.capture_output_region(
             0,
             &output,
             local_x,
@@ -209,8 +382,6 @@ impl WaylandCapture {
             stride,
             format,
         )?;
-        // Recreate the frame for the copy request: the previous proxy was used
-        // only to learn buffer params. Issue a second capture and copy into shm.
         let frame = manager.capture_output_region(
             0,
             &output,
@@ -247,13 +418,24 @@ impl WaylandCapture {
             spins += 1;
         }
         let rgba = shm_to_rgba(&shm_buf)?;
-        let _ = self.conn;
         Ok(Frame {
             width: width as u32,
             height: height as u32,
             rgba,
         })
     }
+}
+
+fn pick_shm_format(formats: &[u32]) -> u32 {
+    const ARGB: u32 = 0;
+    const XRGB: u32 = 1;
+    if formats.iter().any(|f| *f == ARGB) {
+        return ARGB;
+    }
+    if formats.iter().any(|f| *f == XRGB) {
+        return XRGB;
+    }
+    formats.first().copied().unwrap_or(ARGB)
 }
 
 fn make_shm_buffer(
@@ -273,8 +455,8 @@ fn make_shm_buffer(
     let wl_format = match format {
         0 => wl_shm::Format::Argb8888,
         1 => wl_shm::Format::Xrgb8888,
-        0x34325241 => wl_shm::Format::Argb8888, // 'AR24'
-        0x34325258 => wl_shm::Format::Xrgb8888, // 'XR24'
+        0x34325241 => wl_shm::Format::Argb8888,
+        0x34325258 => wl_shm::Format::Xrgb8888,
         _ => wl_shm::Format::Argb8888,
     };
     let buffer = pool.create_buffer(0, width, height, stride, wl_format, qh, ());
@@ -340,7 +522,8 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                     state.shm = Some(registry.bind::<wl_shm::WlShm, _, _>(name, version.min(1), qh, ()));
                 }
                 "wl_output" => {
-                    let output = registry.bind::<wl_output::WlOutput, _, _>(name, version.min(4), qh, ());
+                    let output =
+                        registry.bind::<wl_output::WlOutput, _, _>(name, version.min(4), qh, ());
                     state.outputs.push(OutputInfo {
                         output,
                         name: format!("output-{name}"),
@@ -356,6 +539,20 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                         _,
                         _,
                     >(name, version.min(3), qh, ()));
+                }
+                "ext_image_copy_capture_manager_v1" => {
+                    state.ext_mgr = Some(registry.bind::<
+                        ext_image_copy_capture_manager_v1::ExtImageCopyCaptureManagerV1,
+                        _,
+                        _,
+                    >(name, version.min(1), qh, ()));
+                }
+                "ext_output_image_capture_source_manager_v1" => {
+                    state.ext_src = Some(registry.bind::<
+                        ext_output_image_capture_source_manager_v1::ExtOutputImageCaptureSourceManagerV1,
+                        _,
+                        _,
+                    >(name, version.min(1), qh, ()));
                 }
                 _ => {}
             }
@@ -416,7 +613,12 @@ impl Dispatch<wl_output::WlOutput, ()> for State {
                 info.x = x;
                 info.y = y;
             }
-            wl_output::Event::Mode { flags, width, height, .. } => {
+            wl_output::Event::Mode {
+                flags,
+                width,
+                height,
+                ..
+            } => {
                 let current = match flags {
                     WEnum::Value(f) => f.contains(wl_output::Mode::Current),
                     _ => true,
@@ -497,10 +699,107 @@ impl Dispatch<zwlr_screencopy_frame_v1::ZwlrScreencopyFrameV1, ()> for State {
     }
 }
 
-#[allow(dead_code)]
-fn ext_protocol_names() -> &'static [&'static str] {
-    &[
-        "ext_image_copy_capture_manager_v1",
-        "ext_output_image_capture_source_manager_v1",
-    ]
+impl Dispatch<ext_image_copy_capture_manager_v1::ExtImageCopyCaptureManagerV1, ()> for State {
+    fn event(
+        _: &mut Self,
+        _: &ext_image_copy_capture_manager_v1::ExtImageCopyCaptureManagerV1,
+        _: ext_image_copy_capture_manager_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ext_output_image_capture_source_manager_v1::ExtOutputImageCaptureSourceManagerV1, ()>
+    for State
+{
+    fn event(
+        _: &mut Self,
+        _: &ext_output_image_capture_source_manager_v1::ExtOutputImageCaptureSourceManagerV1,
+        _: ext_output_image_capture_source_manager_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ext_image_capture_source_v1::ExtImageCaptureSourceV1, ()> for State {
+    fn event(
+        _: &mut Self,
+        _: &ext_image_capture_source_v1::ExtImageCaptureSourceV1,
+        _: ext_image_capture_source_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ext_image_copy_capture_session_v1::ExtImageCopyCaptureSessionV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &ext_image_copy_capture_session_v1::ExtImageCopyCaptureSessionV1,
+        event: ext_image_copy_capture_session_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            ext_image_copy_capture_session_v1::Event::BufferSize { width, height } => {
+                if let Some(p) = state.ext_pending.as_mut() {
+                    p.width = width as i32;
+                    p.height = height as i32;
+                }
+            }
+            ext_image_copy_capture_session_v1::Event::ShmFormat { format } => {
+                let fmt = match format {
+                    WEnum::Value(wl_shm::Format::Argb8888) => 0,
+                    WEnum::Value(wl_shm::Format::Xrgb8888) => 1,
+                    WEnum::Value(other) => other as u32,
+                    WEnum::Unknown(u) => u,
+                };
+                if let Some(p) = state.ext_pending.as_mut() {
+                    p.formats.push(fmt);
+                }
+            }
+            ext_image_copy_capture_session_v1::Event::Done => {
+                if let Some(p) = state.ext_pending.as_mut() {
+                    p.done = true;
+                }
+            }
+            ext_image_copy_capture_session_v1::Event::Stopped => {
+                if let Some(p) = state.ext_pending.as_mut() {
+                    p.failed = true;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<ext_image_copy_capture_frame_v1::ExtImageCopyCaptureFrameV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &ext_image_copy_capture_frame_v1::ExtImageCopyCaptureFrameV1,
+        event: ext_image_copy_capture_frame_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            ext_image_copy_capture_frame_v1::Event::Ready => {
+                if let Some(p) = state.ext_pending.as_mut() {
+                    p.ready = true;
+                }
+            }
+            ext_image_copy_capture_frame_v1::Event::Failed { .. } => {
+                if let Some(p) = state.ext_pending.as_mut() {
+                    p.failed = true;
+                }
+            }
+            _ => {}
+        }
+    }
 }

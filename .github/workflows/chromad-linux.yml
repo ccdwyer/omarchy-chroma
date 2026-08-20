@@ -1,0 +1,56 @@
+# Build the Linux chromad helpers this Mac cannot cross-compile.
+# Release tags attach chromad-x86_64-linux + chromad-aarch64-linux and SHA256SUMS.
+# The git tree never contains those binaries.
+
+name: chromad-linux
+
+on:
+  push:
+    tags: ["v*"]
+    paths:
+      - "src/chromad/**"
+      - ".github/workflows/chromad-linux.yml"
+      - "build.sh"
+  pull_request:
+    paths:
+      - "src/chromad/**"
+      - ".github/workflows/chromad-linux.yml"
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - name: aarch64 linker
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: test
+        run: cargo test --manifest-path src/chromad/Cargo.toml
+      - name: build x86_64
+        run: cargo build --release --manifest-path src/chromad/Cargo.toml
+      - name: build aarch64
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release --manifest-path src/chromad/Cargo.toml --target aarch64-unknown-linux-gnu
+      - name: checksums
+        run: |
+          mkdir -p dist
+          cp src/chromad/target/release/chromad dist/chromad-x86_64-linux
+          cp src/chromad/target/aarch64-unknown-linux-gnu/release/chromad dist/chromad-aarch64-linux
+          chmod +x dist/chromad-x86_64-linux dist/chromad-aarch64-linux
+          (cd dist && sha256sum chromad-x86_64-linux chromad-aarch64-linux > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chromad-linux
+          path: dist/*
+      - name: attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/chromad-x86_64-linux
+            dist/chromad-aarch64-linux
+            dist/SHA256SUMS

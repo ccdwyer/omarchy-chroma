@@ -1,0 +1,16 @@
+#!/bin/sh
+# Test double for hyprctl. Serves fixture JSON.
+FIX=${CHROMA_FIX:-.}
+if [ "$1" = "-j" ] && [ "$2" = "activewindow" ]; then
+  cat "$FIX/activewindow.json"
+  exit 0
+fi
+if [ "$1" = "-j" ] && [ "$2" = "monitors" ]; then
+  cat "$FIX/monitors-dual.json"
+  exit 0
+fi
+if [ "$1" = "-j" ] && [ "$2" = "cursorpos" ]; then
+  printf '%s\n' '{"x":400,"y":200}'
+  exit 0
+fi
+exit 1

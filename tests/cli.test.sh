@@ -47,6 +47,14 @@ if [ -n "$BIN" ]; then
 
   rec=$("$BIN" --check-recursion --image "$FIX/split.ppm" --sentinel "#ff2bd6" || true)
   printf '%s' "$rec" | grep -q '"hit":false' && ok "no-recursion on split.ppm" || bad "recursion: $rec"
+
+  shm=$(mktemp -d)
+  printf '%s\n' '{"cmd":"quit"}' | CHROMA_SHM_DIR="$shm" "$BIN" --serve >/dev/null || true
+  if [ -d "$shm" ]; then
+    bad "chromad left shm dir $shm"
+  else
+    ok "chromad removes shm dir on quit"
+  fi
 else
   ok "chromad binary skipped (not built as a real ELF/Mach-O)"
 fi

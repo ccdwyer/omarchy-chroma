@@ -61,45 +61,17 @@ impl Capturer {
         #[cfg(not(target_os = "linux"))]
         let _ = force_grim;
 
-        let has_ext = globals.iter().any(|g| g == "ext_image_copy_capture_manager_v1");
-        let has_wlr = globals.iter().any(|g| g == "zwlr_screencopy_manager_v1");
+        // Only advertise ExtCopy when both ext managers actually bound — a
+        // global name in the registry is not enough if create_session is unused.
+        #[cfg(target_os = "linux")]
+        let (has_ext, has_wlr) = match &wayland {
+            Some(w) => (w.has_ext(), w.has_wlr()),
+            None => (false, false),
+        };
+        #[cfg(not(target_os = "linux"))]
+        let (has_ext, has_wlr) = (false, false);
         let grim_ok = grim::available();
-
-        // Live 128px region needs a region capture. wlr-screencopy exposes
-        // capture_output_region; ext-image-copy-capture is a full-source session.
-        // Negotiate in spec order for *oneshots*; pick the region-capable backend
-        // for the 30Hz stream so we do not pretend a grim slideshow is live.
-        let oneshot_backend = if force_grim {
-            if grim_ok {
-                Backend::Grim
-            } else {
-                Backend::None
-            }
-        } else if has_ext {
-            Backend::ExtCopy
-        } else if has_wlr {
-            Backend::WlrScreencopy
-        } else if grim_ok {
-            Backend::Grim
-        } else {
-            Backend::None
-        };
-
-        let live_backend = if force_grim || oneshot_backend == Backend::Grim {
-            if grim_ok {
-                Backend::Grim
-            } else {
-                Backend::None
-            }
-        } else if has_wlr {
-            Backend::WlrScreencopy
-        } else if has_ext {
-            Backend::ExtCopy
-        } else if grim_ok {
-            Backend::Grim
-        } else {
-            Backend::None
-        };
+        let (live_backend, oneshot_backend) = choose_backends(force_grim, has_ext, has_wlr, grim_ok);
 
         Self {
             live_backend,
@@ -232,6 +204,42 @@ pub fn load_active_window() -> Option<ActiveWindow> {
     })
 }
 
+pub fn choose_backends(force_grim: bool, has_ext: bool, has_wlr: bool, grim_ok: bool) -> (Backend, Backend) {
+    // ExtCopy is only returned when the ext managers are bound. A registry
+    // advertisement without a session/frame implementation must not win.
+    let oneshot = if force_grim {
+        if grim_ok {
+            Backend::Grim
+        } else {
+            Backend::None
+        }
+    } else if has_ext {
+        Backend::ExtCopy
+    } else if has_wlr {
+        Backend::WlrScreencopy
+    } else if grim_ok {
+        Backend::Grim
+    } else {
+        Backend::None
+    };
+    let live = if force_grim {
+        if grim_ok {
+            Backend::Grim
+        } else {
+            Backend::None
+        }
+    } else if has_wlr {
+        Backend::WlrScreencopy
+    } else if has_ext {
+        Backend::ExtCopy
+    } else if grim_ok {
+        Backend::Grim
+    } else {
+        Backend::None
+    };
+    (live, oneshot)
+}
+
 pub fn window_rect_on_focused(monitors: &[Monitor]) -> Option<Rect> {
     let win = load_active_window()?;
     let focused = monitors.iter().find(|m| m.focused).or(monitors.first())?;
@@ -246,5 +254,39 @@ pub fn window_rect_on_focused(monitors: &[Monitor]) -> Option<Rect> {
         None
     } else {
         Some(clipped)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ext_only_compositor_selects_ext_for_oneshot_and_live() {
+        let (live, oneshot) = choose_backends(false, true, false, true);
+        assert_eq!(oneshot, Backend::ExtCopy);
+        assert_eq!(live, Backend::ExtCopy);
+    }
+
+    #[test]
+    fn never_select_ext_when_managers_were_not_bound() {
+        let (live, oneshot) = choose_backends(false, false, true, true);
+        assert_ne!(oneshot, Backend::ExtCopy);
+        assert_eq!(oneshot, Backend::WlrScreencopy);
+        assert_eq!(live, Backend::WlrScreencopy);
+    }
+
+    #[test]
+    fn force_grim_never_advertises_ext() {
+        let (live, oneshot) = choose_backends(true, true, true, true);
+        assert_eq!(live, Backend::Grim);
+        assert_eq!(oneshot, Backend::Grim);
+    }
+
+    #[test]
+    fn no_backends_is_none() {
+        let (live, oneshot) = choose_backends(false, false, false, false);
+        assert_eq!(live, Backend::None);
+        assert_eq!(oneshot, Backend::None);
     }
 }

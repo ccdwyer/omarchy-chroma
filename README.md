@@ -12,16 +12,18 @@ The catalog already has fragments (Omacolor, Loupe, Theme Colors). Chroma is the
 omarchy plugin add <git-url> --enable
 ```
 
-Then build the helper (optional; grim-only pick mode still gives picker / palette / theme):
+`--enable` turns the plugin on and places the bar chip in `barWidget.defaultSection` (`right`). Move it later with the documented layout command:
+
+```sh
+omarchy bar move io.github.chris.chroma --section right
+```
+
+Then build or fetch the helper (optional; grim-only pick mode still gives picker / palette / theme):
 
 ```sh
 ~/.config/omarchy/plugins/io.github.chris.chroma/build.sh
-```
-
-Put the droplet on the bar if `--enable` did not:
-
-```sh
-omarchy bar put io.github.chris.chroma --section right
+# or, after a tagged GitHub Release built by CI:
+~/.config/omarchy/plugins/io.github.chris.chroma/scripts/fetch-prebuilts.sh
 ```
 
 Reload plugins if the shell was already running:
@@ -63,8 +65,8 @@ Right-click the bar chip opens the lens on the history strip. Overlay chrome use
 
 1. Snapshots `~/.config/omarchy/current/theme.name`
 2. Writes `~/.config/omarchy/themes/chroma-preview/{colors.toml,hyprland.conf,alacritty.toml}`
-3. Applies with **`omarchy-theme-set chroma-preview`** (the same script the shell’s theme switcher uses)
-4. Leaves **revert (`u`)** visible
+3. Validates `colors.toml` (`theme_valid`) **then** runs **`omarchy-theme-set chroma-preview`**
+4. Sets revert (`u`) live **only after that process exits 0**
 
 `omarchy-theme-set` copies the theme into `current/theme` and runs `omarchy-theme-set-templates`, so a `colors.toml` is enough for the rest of the desktop. The extra hyprland/alacritty files are a fallback if templates are missing.
 
@@ -87,7 +89,7 @@ Self-capture: loupe sits ~60px off the cursor; one-shot actions hide the overlay
 - **Ruler is px only.** EDID DPI lies; millimetres and persistent guides are v1.1.
 - **OCR/QR are garnish.** Buttons and keys no-op with an install hint (`pacman -S tesseract zbar`) when the binaries are missing. They are not in the 60s demo.
 - **Theme apply shells out to `omarchy-theme-set`.** If that script is missing, apply fails and revert is still offered only after a successful snapshot. A broken preview is the worst ending — revert is the whole point.
-- **Helper binary.** `bin/chromad` is produced by `build.sh` on the machine (x86_64 and aarch64 Linux). This tree does not ship prebuilt Linux binaries from macOS. Missing binary → `compat/chromad.sh` (grim + python3 k-means).
+- **Helper binary.** Git does not contain Linux ELF blobs (this Mac has no cross-toolchain; fake binaries are worse than none). **x86_64 and aarch64** `chromad` plus `SHA256SUMS` are produced by `.github/workflows/chromad-linux.yml` and attached to GitHub Releases. On the device: `./build.sh`, or `./scripts/fetch-prebuilts.sh`. Missing `bin/chromad` → `compat/chromad.sh` (grim + python3 k-means).
 - **Keybinds are yours.** The plugin never writes `hyprland.conf`.
 - **Fractional scale.** Mapping lives in one module (`logical × scale` from `hyprctl -j monitors`). `chromad --calibrate` is the gate; it is not a substitute for a nested Hyprland 1x/1.5x/2x run on the device.
 - **No second Quickshell process.** No `omarchy.*` id.
@@ -107,13 +109,13 @@ Pick history is runtime state at `~/.local/state/chroma/history.json`.
 ```sh
 omarchy-shell shell summon io.github.chris.chroma '{}'
 omarchy-shell shell hide io.github.chris.chroma
-omarchy-shell shell call io.github.chris.chroma pick
-omarchy-shell shell call io.github.chris.chroma palette
-omarchy-shell shell call io.github.chris.chroma revert
-omarchy-shell shell call io.github.chris.chroma status
+omarchy-shell shell call io.github.chris.chroma pick '{}'
+omarchy-shell shell call io.github.chris.chroma palette '{}'
+omarchy-shell shell call io.github.chris.chroma revert '{}'
+omarchy-shell shell call io.github.chris.chroma status '{}'
 ```
 
-The overlay also registers `IpcHandler` target `io.github.chris.chroma`.
+Those methods live on the overlay **root Item** (`pick`/`palette`/`revert`/`status` each take a string argument and return a string), which is what `shell call <id> <method> <arg>` invokes. An `IpcHandler` with the same id forwards to the same functions.
 
 ## Tests (off-device)
 
@@ -121,6 +123,7 @@ The overlay also registers `IpcHandler` target `io.github.chris.chroma`.
 node tests/run.js
 cargo test --manifest-path src/chromad/Cargo.toml
 sh tests/cli.test.sh
+sh tests/compat-protocol.test.sh
 ```
 
 ## Remove

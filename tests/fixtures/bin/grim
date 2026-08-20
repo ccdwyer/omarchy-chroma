@@ -1,0 +1,20 @@
+#!/bin/sh
+# Test double for grim. Logs argv and writes a tiny P6 PPM.
+log=${CHROMA_GRIM_LOG:-/tmp/chroma-grim.log}
+printf '%s\n' "$*" >> "$log"
+out=""
+for out do :; done
+[ -n "$out" ] || out="-"
+body="P6
+2 2
+255
+"
+# four RGB pixels
+bin=$(printf '\334\024\024\334\024\024\024\050\334\024\050\334')
+if [ "$out" = "-" ]; then
+  printf '%s' "$body"
+  printf '%s' "$bin"
+else
+  printf '%s' "$body" > "$out"
+  printf '%s' "$bin" >> "$out"
+fi

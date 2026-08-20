@@ -78,6 +78,42 @@ fn shm_dir() -> PathBuf {
     base.join(format!("chroma-{pid}"))
 }
 
+static SHM_PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+fn remember_shm(dir: PathBuf) {
+    let _ = SHM_PATH.set(dir);
+    install_shm_signals();
+}
+
+fn remove_shm() {
+    if let Some(p) = SHM_PATH.get() {
+        let _ = std::fs::remove_dir_all(p);
+    }
+}
+
+#[cfg(unix)]
+fn install_shm_signals() {
+    unsafe {
+        libc::signal(libc::SIGINT, shm_signal as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGTERM, shm_signal as *const () as libc::sighandler_t);
+        let _ = libc::atexit(shm_atexit);
+    }
+}
+
+#[cfg(not(unix))]
+fn install_shm_signals() {}
+
+#[cfg(unix)]
+extern "C" fn shm_signal(_: i32) {
+    remove_shm();
+    unsafe { libc::_exit(0) }
+}
+
+#[cfg(unix)]
+extern "C" fn shm_atexit() {
+    remove_shm();
+}
+
 struct Server {
     capturer: Capturer,
     monitors: Vec<Monitor>,
@@ -95,6 +131,7 @@ impl Server {
     fn new() -> Self {
         let dir = shm_dir();
         let _ = std::fs::create_dir_all(&dir);
+        remember_shm(dir.clone());
         let capturer = Capturer::negotiate();
         let monitors = capture::load_monitors();
         let cursor = capture::load_cursor().unwrap_or((0.0, 0.0));
@@ -376,6 +413,7 @@ impl Server {
             }
             "quit" => {
                 emit(json!({"ok": true, "event": "bye"}));
+                remove_shm();
                 std::process::exit(0);
             }
             other => fail(&format!("unknown cmd {other}")),

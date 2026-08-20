@@ -16,9 +16,9 @@ BarWidget {
 
   readonly property string pluginId: "io.github.chris.chroma"
 
-  function open() { root.summonOverlay("{}") }
-  function close() {}
-  function toggle() { root.summonOverlay("{}") }
+  function open() { root.summonOverlay(root.payloadJson()) }
+  function close() { root.hideOverlay() }
+  function toggle() { root.toggleOverlay(root.payloadJson()) }
 
   function summonOverlay(payload) {
     var body = payload || root.payloadJson()
@@ -26,11 +26,24 @@ BarWidget {
       bar.shell.summon(root.pluginId, body)
       return
     }
+    Quickshell.execDetached(["omarchy-shell", "shell", "summon", root.pluginId, body])
+  }
+
+  function hideOverlay() {
+    if (bar && bar.shell && typeof bar.shell.hide === "function") {
+      bar.shell.hide(root.pluginId)
+      return
+    }
+    Quickshell.execDetached(["omarchy-shell", "shell", "hide", root.pluginId])
+  }
+
+  function toggleOverlay(payload) {
+    var body = payload || root.payloadJson()
     if (bar && bar.shell && typeof bar.shell.toggle === "function") {
       bar.shell.toggle(root.pluginId, body)
       return
     }
-    Quickshell.execDetached(["omarchy-shell", "shell", "summon", root.pluginId, body])
+    Quickshell.execDetached(["omarchy-shell", "shell", "toggle", root.pluginId, body])
   }
 
   function payloadJson() {
@@ -66,7 +79,7 @@ BarWidget {
                  : "Chroma — screen lens (click) · history (right-click)"
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.LeftButton)
-        root.summonOverlay(root.payloadJson())
+        root.toggleOverlay(root.payloadJson())
       else if (buttonCode === Qt.RightButton)
         root.summonOverlay(JSON.stringify({
           loupeOffset: root.loupeOffset,

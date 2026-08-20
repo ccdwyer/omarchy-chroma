@@ -26,6 +26,9 @@ Item {
   property bool freezeOpen: false
   property bool historyOpen: false
   property bool themeLive: false
+  property bool awaitingThemeValid: false
+  property string themeApplyName: ""
+  property string themeSetErr: ""
   property bool paletteBusy: false
   property int loupeOffset: 60
   property int historyLimit: 24
@@ -128,6 +131,33 @@ Item {
       root.open(payloadJson || "{}")
   }
 
+  function pick(arg) {
+    root.withHiddenCapture("pick")
+    return "ok"
+  }
+
+  function palette(arg) {
+    var action = "palette"
+    try {
+      if (arg && String(arg).length && String(arg) !== "{}") {
+        var p = JSON.parse(arg)
+        if (p && p.source === "monitor")
+          action = "palette-monitor"
+      }
+    } catch (e) {}
+    root.withHiddenCapture(action)
+    return "ok"
+  }
+
+  function revert(arg) {
+    root.revertTheme()
+    return "ok"
+  }
+
+  function status(arg) {
+    return root.statusJson()
+  }
+
   function applyPayload(payloadJson) {
     try {
       var payload = payloadJson && String(payloadJson).length ? JSON.parse(payloadJson) : {}
@@ -223,7 +253,6 @@ Item {
       gen.files["alacritty.toml"]
     ]
     writeThemeProc.running = true
-    client.writeTheme(root.themeDir, gen.files)
   }
 
   function snapshotTheme() {
@@ -237,8 +266,19 @@ Item {
   }
 
   function applyPreview() {
+    root.themeApplyName = "chroma-preview"
+    themeSetProc.running = false
     themeSetProc.command = ["omarchy-theme-set", "chroma-preview"]
     themeSetProc.running = true
+  }
+
+  function onThemeValidated(ok) {
+    root.awaitingThemeValid = false
+    if (!ok) {
+      root.toast = "chroma-preview failed validation"
+      return
+    }
+    root.applyPreview()
   }
 
   function revertTheme() {
@@ -253,10 +293,10 @@ Item {
       root.toast = "nothing to revert"
       return
     }
+    root.themeApplyName = name
+    themeSetProc.running = false
     themeSetProc.command = ["omarchy-theme-set", name]
     themeSetProc.running = true
-    root.themeLive = false
-    root.toast = "reverted to " + name
   }
 
   function statusJson() {
@@ -296,10 +336,16 @@ Item {
     onFailed: function(err) {
       root.showAgain()
       root.paletteBusy = false
+      if (root.awaitingThemeValid) {
+        root.awaitingThemeValid = false
+        root.toast = "theme validation failed: " + err
+        return
+      }
       root.toast = err
     }
+    onThemeValidated: function(ok) { root.onThemeValidated(ok) }
     onFrame: function(msg) {
-      if (root.pendingAction === "pick" || root.capturing && root.pendingAction === "oneshot")
+      if (root.capturing)
         root.showAgain()
       if (msg && msg.pixel)
         root.pixel = msg.pixel
@@ -328,8 +374,12 @@ Item {
     interval: 80
     repeat: false
     onTriggered: {
-      client.validateTheme(root.themeDir)
-      root.applyPreview()
+      if (client.ready) {
+        root.awaitingThemeValid = true
+        client.validateTheme(root.themeDir)
+      } else {
+        root.applyPreview()
+      }
     }
   }
 
@@ -395,24 +445,32 @@ Item {
   Process {
     id: themeSetProc
     running: false
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var out = String(text || "")
-        if (themeSetProc.command && themeSetProc.command.length > 1 && themeSetProc.command[1] === "chroma-preview") {
-          root.themeLive = true
-          root.toast = "chroma-preview applied — u to revert"
-        }
-        if (out.indexOf("does not exist") >= 0)
-          root.toast = out.trim()
-      }
-    }
     stderr: StdioCollector {
       waitForEnd: true
-      onStreamFinished: {
-        var err = String(text || "").trim()
-        if (err.length)
-          root.toast = err
+      onStreamFinished: { root.themeSetErr = String(text || "").trim() }
+    }
+    onExited: function(code) {
+      var name = root.themeApplyName
+      var err = root.themeSetErr
+      root.themeApplyName = ""
+      root.themeSetErr = ""
+      if (name === "chroma-preview") {
+        if (code === 0) {
+          root.themeLive = true
+          root.toast = "chroma-preview applied — u to revert"
+        } else {
+          root.themeLive = false
+          root.toast = err.length ? err : ("omarchy-theme-set failed (" + code + ")")
+        }
+        return
+      }
+      if (name && name !== "chroma-preview") {
+        if (code === 0) {
+          root.themeLive = false
+          root.toast = "reverted to " + name
+        } else {
+          root.toast = err.length ? err : ("revert failed (" + code + ")")
+        }
       }
     }
   }
@@ -456,10 +514,10 @@ Item {
     function close(): string { root.close(); return "ok" }
     function toggle(payload: string): string { root.toggle(payload || "{}"); return "ok" }
     function ping(): string { return "ok" }
-    function pick(): string { root.withHiddenCapture("pick"); return "ok" }
-    function palette(): string { root.withHiddenCapture("palette"); return "ok" }
-    function revert(): string { root.revertTheme(); return "ok" }
-    function status(): string { return root.statusJson() }
+    function pick(arg: string): string { return root.pick(arg || "") }
+    function palette(arg: string): string { return root.palette(arg || "") }
+    function revert(arg: string): string { return root.revert(arg || "") }
+    function status(arg: string): string { return root.status(arg || "") }
   }
 
   PanelWindow {

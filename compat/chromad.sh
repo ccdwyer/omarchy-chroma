@@ -7,7 +7,9 @@ set -eu
 have() { command -v "$1" >/dev/null 2>&1; }
 
 PID=$$
-if [ -d /dev/shm ]; then
+if [ -n "${CHROMA_SHM_DIR:-}" ]; then
+  SHM="$CHROMA_SHM_DIR"
+elif [ -d /dev/shm ]; then
   SHM="/dev/shm/chroma-$PID"
 elif [ -n "${XDG_RUNTIME_DIR:-}" ]; then
   SHM="$XDG_RUNTIME_DIR/chroma-$PID"
@@ -15,6 +17,8 @@ else
   SHM="${TMPDIR:-/tmp}/chroma-$PID"
 fi
 mkdir -p "$SHM"
+cleanup_shm() { rm -rf "$SHM"; }
+trap cleanup_shm EXIT INT TERM
 SLOT=0
 GEN=0
 
@@ -157,6 +161,50 @@ copy_png_slot() {
 CX=960
 CY=540
 
+# Active window ∩ focused monitor, grim geometry "x,y wxh". Empty → caller falls back.
+window_geom() {
+  have hyprctl || return 1
+  have python3 || return 1
+  python3 - <<'PY'
+import json, subprocess, sys
+try:
+    win = json.loads(subprocess.check_output(["hyprctl", "-j", "activewindow"], text=True))
+    mons = json.loads(subprocess.check_output(["hyprctl", "-j", "monitors"], text=True))
+except Exception:
+    sys.exit(1)
+if not isinstance(win, dict) or not isinstance(mons, list) or not mons:
+    sys.exit(1)
+at = win.get("at") or [0, 0]
+size = win.get("size") or [0, 0]
+wx, wy = int(at[0]), int(at[1])
+ww, wh = int(size[0]), int(size[1])
+focused = next((m for m in mons if m.get("focused")), mons[0])
+scale = float(focused.get("scale") or 1) or 1.0
+mx, my = int(focused.get("x") or 0), int(focused.get("y") or 0)
+mw = int((int(focused.get("width") or 0) / scale))
+mh = int((int(focused.get("height") or 0) / scale))
+x = max(wx, mx)
+y = max(wy, my)
+r = min(wx + ww, mx + mw)
+b = min(wy + wh, my + mh)
+w, h = int(r - x), int(b - y)
+if w <= 0 or h <= 0:
+    sys.exit(1)
+print("%d,%d %dx%d" % (x, y, w, h))
+PY
+}
+
+json_field() {
+  printf '%s' "$1" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p"
+}
+
+emit_frame() {
+  path=$1
+  pix=$2
+  x=${3:-0}; y=${4:-0}; w=${5:-128}; h=${6:-128}
+  emit "{\"ok\":true,\"event\":\"frame\",\"path\":\"$path\",\"n\":$GEN,\"slot\":$SLOT,\"x\":$x,\"y\":$y,\"w\":$w,\"h\":$h,\"pixel\":$pix}"
+}
+
 handle() {
   line=$1
   cmd=$(printf '%s' "$line" | sed -n 's/.*"cmd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
@@ -173,28 +221,63 @@ handle() {
     stop_stream)
       emit '{"ok":true,"event":"stream","running":false}'
       ;;
-    pick|oneshot|freeze)
+    pick)
       geom=$(region_geom "${CX%.*}" "${CY%.*}")
       ppm="$SHM/shot.ppm"
       if grim_ppm "$geom" "$ppm"; then
         pix=$(pixel_from_ppm "$ppm")
         path=$(copy_png_slot "$ppm")
-        emit "{\"ok\":true,\"event\":\"pick\",\"pixel\":$pix,\"hex\":$(printf '%s' "$pix" | sed -n 's/.*"hex":"\([^"]*\)".*/"\1"/p')}"
-        emit "{\"ok\":true,\"event\":\"frame\",\"path\":\"$path\",\"n\":$GEN,\"slot\":$SLOT,\"x\":0,\"y\":0,\"w\":128,\"h\":128,\"pixel\":$pix}"
+        hex=$(printf '%s' "$pix" | sed -n 's/.*"hex":"\([^"]*\)".*/"\1"/p')
+        emit "{\"ok\":true,\"event\":\"pick\",\"pixel\":$pix,\"hex\":$hex}"
+        emit_frame "$path" "$pix"
+      else
+        emit '{"ok":false,"event":"error","error":"grim capture failed (is grim installed?)"}'
+      fi
+      ;;
+    oneshot)
+      geom=$(region_geom "${CX%.*}" "${CY%.*}")
+      ppm="$SHM/shot.ppm"
+      if grim_ppm "$geom" "$ppm"; then
+        pix=$(pixel_from_ppm "$ppm")
+        path=$(copy_png_slot "$ppm")
+        emit_frame "$path" "$pix"
+      else
+        emit '{"ok":false,"event":"error","error":"grim capture failed (is grim installed?)"}'
+      fi
+      ;;
+    freeze)
+      geom=$(region_geom "${CX%.*}" "${CY%.*}")
+      ppm="$SHM/shot.ppm"
+      if grim_ppm "$geom" "$ppm"; then
+        pix=$(pixel_from_ppm "$ppm")
+        path=$(copy_png_slot "$ppm")
+        emit_frame "$path" "$pix"
+        emit '{"ok":true,"event":"frozen","factor":8}'
       else
         emit '{"ok":false,"event":"error","error":"grim capture failed (is grim installed?)"}'
       fi
       ;;
     palette)
-      geom=$(region_geom "${CX%.*}" "${CY%.*}")
-      # Prefer active window if hyprctl exists
-      if have hyprctl; then
-        :
+      source=$(json_field "$line" source)
+      [ -n "$source" ] || source=window
+      geom=""
+      if [ "$source" = "window" ]; then
+        geom=$(window_geom || true)
+      fi
+      if [ -z "$geom" ] && [ "$source" = "monitor" ]; then
+        geom=""
       fi
       ppm="$SHM/shot.ppm"
-      if grim_ppm "full" "$ppm" || grim_ppm "$geom" "$ppm"; then
+      captured=false
+      if [ -n "$geom" ]; then
+        grim_ppm "$geom" "$ppm" && captured=true
+      fi
+      if [ "$captured" = false ]; then
+        grim_ppm "full" "$ppm" && captured=true
+      fi
+      if [ "$captured" = true ]; then
         cols=$(kmeans_from_ppm "$ppm")
-        emit "{\"ok\":true,\"event\":\"palette\",\"source\":\"window\",\"colors\":$cols}"
+        emit "{\"ok\":true,\"event\":\"palette\",\"source\":\"$source\",\"colors\":$cols}"
       else
         emit '{"ok":false,"event":"error","error":"grim capture failed"}'
       fi
