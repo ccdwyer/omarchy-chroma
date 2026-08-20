@@ -30,10 +30,12 @@ omarchy-shell shell rescanPlugins
 
 ## Usage
 
-Click the droplet, or bind a key. The plugin does **not** write Hyprland config.
+Click the droplet, or bind a key. Super+C is Omarchy's universal copy, so Chroma prefers Super+Alt+C.
+
+If that combo is free, the overlay **keys** chip and a **keys** chip on the bar offer **Add keybindings**. That writes an `o.bind` line to `~/.config/hypr/bindings.lua` (Hyprland reloads on save). Combos you already use are skipped; Super+Alt+C falls back to Super+Shift+Alt+C. The plugin never unbinds someone else's shortcut.
 
 ```
-bind = SUPER, C, exec, omarchy-shell shell summon io.github.chris.chroma '{}'
+bind = SUPER ALT, C, exec, omarchy-shell shell summon io.github.chris.chroma '{}'
 ```
 
 | Key | Action |
@@ -86,7 +88,7 @@ Self-capture: loupe sits ~60px off the cursor; one-shot actions hide the overlay
 - **OCR/QR are garnish.** Buttons and keys no-op with an install hint (`pacman -S tesseract zbar`) when the binaries are missing. They are not in the 60s demo.
 - **Theme apply shells out to `omarchy-theme-set`.** If that script is missing, apply fails and revert is still offered only after a successful snapshot. A broken preview is the worst ending — revert is the whole point.
 - **Helper binary.** Git does not contain Linux ELF blobs (this Mac has no cross-toolchain; fake binaries are worse than none). **x86_64 and aarch64** `chromad` plus `SHA256SUMS` are produced by `.github/workflows/chromad-linux.yml` and attached to GitHub Releases. On the device: `./build.sh`, or `./scripts/fetch-prebuilts.sh`. Missing `bin/chromad` → `compat/chromad.sh` (grim + python3 k-means).
-- **Keybinds are yours.** The plugin never writes `hyprland.conf`.
+- **Keybinds are opt-in.** **Add keybindings** appends a marked `o.bind` block to `~/.config/hypr/bindings.lua` after checking `hyprctl -j binds`. Occupied combos are skipped. Never `hl.unbind`.
 - **Fractional scale.** Mapping lives in one module (`logical × scale` from `hyprctl -j monitors`). `chromad --calibrate` is the gate; it is not a substitute for a nested Hyprland 1x/1.5x/2x run on the device.
 - **No second Quickshell process.** No `omarchy.*` id.
 
@@ -107,6 +109,7 @@ Pick history is runtime state at `~/.local/state/chroma/history.json`.
 ```sh
 omarchy-shell shell summon io.github.chris.chroma '{}'
 omarchy-shell shell hide io.github.chris.chroma
+omarchy-shell io.github.chris.chroma installBinds ''
 omarchy-shell io.github.chris.chroma pick '{}'
 omarchy-shell io.github.chris.chroma palette '{}'
 omarchy-shell io.github.chris.chroma revert '{}'

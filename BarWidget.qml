@@ -4,6 +4,7 @@ import qs.Commons
 import qs.Ui
 import "js/History.js" as History
 import "js/Color.js" as ColorMath
+import "js/Binds.js" as Binds
 
 BarWidget {
   id: root
@@ -13,6 +14,8 @@ BarWidget {
   property int historyLimit: 24
   property int zoomDefault: 4
   property string lastHex: ""
+  property bool offerBinds: false
+  property string offerNote: ""
 
   readonly property string pluginId: "io.github.chris.chroma"
 
@@ -57,10 +60,17 @@ BarWidget {
   function refresh() {
     var snap = History.snapshot()
     root.lastHex = snap.picks.length ? snap.picks[0].hex : ""
+    var offer = Binds.offer || {}
+    root.offerBinds = !!offer.needed
+    root.offerNote = String(offer.note || "Add Super+Alt+C")
   }
 
-  implicitWidth: button.implicitWidth
-  implicitHeight: button.implicitHeight
+  function installBinds() {
+    Quickshell.execDetached(["omarchy-shell", root.pluginId, "installBinds", ""])
+  }
+
+  implicitWidth: row.implicitWidth
+  implicitHeight: row.implicitHeight
 
   Timer {
     interval: 800
@@ -69,37 +79,52 @@ BarWidget {
     onTriggered: root.refresh()
   }
 
-  WidgetButton {
-    id: button
-    anchors.fill: parent
-    bar: root.bar
-    text: "●"
-    tooltipText: root.lastHex
-                 ? ("Chroma " + root.lastHex + " — click lens, right-click history")
-                 : "Chroma — screen lens (click) · history (right-click)"
-    onPressed: function(buttonCode) {
-      if (buttonCode === Qt.LeftButton)
-        root.toggleOverlay(root.payloadJson())
-      else if (buttonCode === Qt.RightButton)
-        root.summonOverlay(JSON.stringify({
-          loupeOffset: root.loupeOffset,
-          historyLimit: root.historyLimit,
-          zoomDefault: root.zoomDefault,
-          mode: "history"
-        }))
-    }
-  }
+  Row {
+    id: row
+    spacing: Style.space(4)
 
-  Rectangle {
-    visible: ColorMath.normalizeHex(root.lastHex) !== null
-    width: Style.space(8)
-    height: Style.space(8)
-    radius: width / 2
-    anchors.right: parent.right
-    anchors.top: parent.top
-    color: root.lastHex || Color.accent
-    border.width: 1
-    border.color: Color.menu.border
+    WidgetButton {
+      id: button
+      bar: root.bar
+      text: "●"
+      tooltipText: root.lastHex
+                   ? ("Chroma " + root.lastHex + " — click lens, right-click history")
+                   : "Chroma — screen lens (click) · history (right-click)"
+      onPressed: function(buttonCode) {
+        if (buttonCode === Qt.LeftButton)
+          root.toggleOverlay(root.payloadJson())
+        else if (buttonCode === Qt.RightButton)
+          root.summonOverlay(JSON.stringify({
+            loupeOffset: root.loupeOffset,
+            historyLimit: root.historyLimit,
+            zoomDefault: root.zoomDefault,
+            mode: "history"
+          }))
+      }
+
+      Rectangle {
+        visible: ColorMath.normalizeHex(root.lastHex) !== null
+        width: Style.space(8)
+        height: Style.space(8)
+        radius: width / 2
+        anchors.right: parent.right
+        anchors.top: parent.top
+        color: root.lastHex || Color.accent
+        border.width: 1
+        border.color: Color.menu.border
+      }
+    }
+
+    WidgetButton {
+      visible: root.offerBinds
+      bar: root.bar
+      text: "keys"
+      tooltipText: root.offerNote.length ? root.offerNote : "Add Super+Alt+C keybinding (skips combos you already use)"
+      onPressed: function(buttonCode) {
+        if (buttonCode === Qt.LeftButton)
+          root.installBinds()
+      }
+    }
   }
 
   Component.onCompleted: root.refresh()

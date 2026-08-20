@@ -58,5 +58,5 @@ Linux prebuilts: `scripts/fetch-prebuilts.sh` keeps the published asset filename
 - Persistent guides (v1.1)
 - Millimetre ruler
 - A C++ QImage wrapper (plugins cannot reliably register C++ types in the shared shell)
-- Writing Hyprland config
+- Writing Hyprland config except an opt-in `Add keybindings` control that appends a marked `o.bind` block to `~/.config/hypr/bindings.lua` after checking `hyprctl -j binds`. Occupied combos are skipped or replaced with Super+Shift+Alt+C. Never `hl.unbind`.
 - Network, accounts, telemetry

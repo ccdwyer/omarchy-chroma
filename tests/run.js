@@ -67,6 +67,7 @@ const Theme = loadEngine("Theme.js", { Color })
 const History = loadEngine("History.js")
 const Capture = loadEngine("Capture.js")
 const ThemeSession = loadEngine("ThemeSession.js")
+const Binds = loadEngine("Binds.js")
 
 let passed = 0
 let failed = 0
@@ -364,6 +365,66 @@ test("capture: loupe flips near the right edge", () => {
   assert.ok(pos.x + 192 <= 1920)
   assert.strictEqual(Capture.hudAtTop(1000, 1080), true)
   assert.strictEqual(Capture.hudAtTop(100, 1080), false)
+})
+
+test("binds: empty live list offers SUPER+ALT+C", () => {
+  const p = Binds.plan([])
+  assert.strictEqual(p.needed, true)
+  assert.strictEqual(p.toAdd.length, 1)
+  assert.strictEqual(p.toAdd[0].chosen, "SUPER + ALT + C")
+  assert.ok(Binds.luaBlock(p.toAdd).indexOf("o.bind(\"SUPER + ALT + C\"") === 0)
+  assert.ok(Binds.luaBlock(p.toAdd).indexOf("io.github.chris.chroma") >= 0)
+  assert.ok(p.toAdd[0].chosen !== "SUPER + C")
+})
+
+test("binds: SUPER+C stock copy is not stolen; preferred is SUPER+ALT+C", () => {
+  const live = [
+    { modmask: 64, key: "C", dispatcher: "__lua", arg: "61", description: "Universal copy" }
+  ]
+  const p = Binds.plan(live)
+  assert.strictEqual(p.needed, true)
+  assert.strictEqual(p.toAdd[0].chosen, "SUPER + ALT + C")
+})
+
+test("binds: occupied preferred uses SUPER+SHIFT+ALT+C", () => {
+  const live = [
+    { modmask: 72, key: "C", dispatcher: "exec", arg: "other", description: "already bound" }
+  ]
+  const p = Binds.plan(live)
+  assert.strictEqual(p.needed, true)
+  assert.strictEqual(p.toAdd[0].chosen, "SUPER + SHIFT + ALT + C")
+  assert.ok(p.note.indexOf("SUPER + SHIFT + ALT + C") >= 0)
+})
+
+test("binds: both combos taken skips and keeps the offer", () => {
+  const live = [
+    { modmask: 72, key: "C", dispatcher: "exec", arg: "other", description: "taken" },
+    { modmask: 73, key: "C", dispatcher: "exec", arg: "other2", description: "also taken" }
+  ]
+  const p = Binds.plan(live)
+  assert.strictEqual(p.needed, true)
+  assert.strictEqual(p.toAdd.length, 0)
+  assert.strictEqual(p.skipped.length, 1)
+  assert.ok(p.note.indexOf("SUPER + ALT + C is taken") >= 0)
+})
+
+test("binds: already-ours via lua description hides the offer", () => {
+  const live = [
+    { modmask: 72, key: "C", dispatcher: "__lua", arg: "15", description: "Chroma" }
+  ]
+  const p = Binds.plan(live)
+  assert.strictEqual(p.needed, false)
+  assert.strictEqual(p.already, 1)
+})
+
+test("binds: already-ours via plugin id in arg hides the offer", () => {
+  const live = [
+    { modmask: 73, key: "C", dispatcher: "exec", arg: "omarchy-shell shell summon io.github.chris.chroma '{}'", description: "" }
+  ]
+  const p = Binds.plan(live)
+  assert.strictEqual(p.needed, false)
+  assert.ok(p.already >= 1)
+  assert.strictEqual(p.toAdd.length, 0)
 })
 
 const summary = passed + " passed, " + failed + " failed"

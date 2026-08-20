@@ -9,6 +9,7 @@ import "js/Theme.js" as Theme
 import "js/ThemeSession.js" as ThemeSession
 import "js/History.js" as History
 import "js/Capture.js" as Capture
+import "js/Binds.js" as Binds
 import "qml"
 
 Item {
@@ -49,6 +50,10 @@ Item {
   property int historyRev: 0
   property int hideAckTries: 0
   property int motionMs: reduceMotion ? 0 : 150
+  property bool bindOfferNeeded: true
+  property string bindOfferNote: ""
+  property var workQueue: []
+  property var workCurrent: null
 
   property color background: Color.menu.background
   property color foreground: Color.menu.text
@@ -160,6 +165,59 @@ Item {
 
   function status(arg) {
     return root.statusJson()
+  }
+
+  function applyBindPlan(plan) {
+    var p = plan || Binds.offer
+    root.bindOfferNeeded = !!p.needed
+    root.bindOfferNote = String(p.note || "")
+    Binds.setOffer(p)
+  }
+
+  function enqueueWork(command, done) {
+    workQueue.push({ command: command, done: done || null })
+    runWork()
+  }
+
+  function runWork() {
+    if (workProc.running || root.workCurrent)
+      return
+    if (!workQueue.length)
+      return
+    root.workCurrent = workQueue.shift()
+    workProc.command = root.workCurrent.command
+    workProc.running = true
+  }
+
+  function scanBinds() {
+    enqueueWork(["hyprctl", "-j", "binds"], function(text, code) {
+      if (Number(code) !== 0)
+        return
+      root.applyBindPlan(Binds.applyScan(text))
+    })
+  }
+
+  function installBinds(arg) {
+    enqueueWork(["hyprctl", "-j", "binds"], function(text, code) {
+      if (Number(code) !== 0) {
+        root.bindOfferNote = "could not read keybinds"
+        return
+      }
+      var plan = Binds.applyScan(text)
+      if (!plan.toAdd || !plan.toAdd.length) {
+        root.applyBindPlan(plan)
+        return
+      }
+      var lua = Binds.luaBlock(plan.toAdd)
+      enqueueWork(["python3", root.pluginDir + "/compat/install-binds.py", root.pluginId, lua], function(out, instCode) {
+        if (Number(instCode) !== 0) {
+          root.bindOfferNote = "could not write ~/.config/hypr/bindings.lua"
+          return
+        }
+        Qt.callLater(root.scanBinds)
+      })
+    })
+    return "ok"
   }
 
   function applyPayload(payloadJson) {
@@ -349,7 +407,9 @@ Item {
       backend: client.backend,
       pickMode: client.pickMode,
       themeLive: root.themeLive,
-      originalTheme: root.originalTheme
+      originalTheme: root.originalTheme,
+      bindOfferNeeded: root.bindOfferNeeded,
+      bindOfferNote: root.bindOfferNote
     })
   }
 
@@ -492,6 +552,36 @@ Item {
   }
 
   Process {
+    id: workProc
+    running: false
+    stdout: StdioCollector {
+      id: workOut
+      waitForEnd: true
+    }
+    onExited: function(exitCode) {
+      var text = workOut.text
+      var job = root.workCurrent
+      root.workCurrent = null
+      if (job && job.done) {
+        try {
+          job.done(text, exitCode)
+        } catch (e) {
+          console.warn("chroma: work callback failed", e)
+        }
+      }
+      root.runWork()
+    }
+  }
+
+  Timer {
+    id: bindScanTimer
+    interval: 3000
+    repeat: true
+    running: true
+    onTriggered: root.scanBinds()
+  }
+
+  Process {
     id: mkdirProc
     running: false
     command: ["mkdir", "-p", root.stateDir]
@@ -594,6 +684,7 @@ Item {
     function palette(arg: string): string { return root.palette(arg || "") }
     function revert(arg: string): string { return root.revert(arg || "") }
     function status(arg: string): string { return root.status(arg || "") }
+    function installBinds(arg: string): string { return root.installBinds(arg) }
   }
 
   PanelWindow {
@@ -777,11 +868,14 @@ Item {
       background: root.background
       surfaceBorderSpec: root.borderSpec
       fontFamily: root.fontFamily
+      offerBinds: root.bindOfferNeeded
+      offerNote: root.bindOfferNote
       opacity: root.opened ? 1 : 0
       onCopyRequested: root.copyHex(true)
       onPaletteRequested: root.withHiddenCapture("palette")
       onThemeRequested: root.makeTheme()
       onRevertRequested: root.revertTheme()
+      onKeysRequested: root.installBinds("")
       onHistoryChosen: function(hex) {
         var d = ColorMath.parseColor(hex)
         if (d) {
@@ -824,6 +918,9 @@ Item {
       fontFamily: root.fontFamily
       ocrAvailable: client.ocrAvailable
       qrAvailable: client.qrAvailable
+      offerBinds: root.bindOfferNeeded
+      offerNote: root.bindOfferNote
+      onKeysRequested: root.installBinds("")
     }
 
     Toast {
@@ -842,5 +939,6 @@ Item {
     mkdirProc.running = true
     historyFile.reload()
     sessionFile.reload()
+    Qt.callLater(root.scanBinds)
   }
 }

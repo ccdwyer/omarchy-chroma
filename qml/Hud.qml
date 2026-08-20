@@ -17,12 +17,15 @@ BorderSurface {
   property var surfaceBorderSpec: Border.surfaceSpec("menu", "border", Color.menu.border, 1)
   property string fontFamily: Style.font.menuFamily
   property var picks: []
+  property bool offerBinds: false
+  property string offerNote: ""
 
   signal copyRequested()
   signal paletteRequested()
   signal themeRequested()
   signal revertRequested()
   signal historyChosen(string hex)
+  signal keysRequested()
 
   width: Math.min(Style.space(640), parent ? parent.width - Style.space(48) : 640)
   height: col.implicitHeight + Style.space(24)
@@ -145,6 +148,25 @@ BorderSurface {
               else if (modelData.id === "revert") root.revertRequested()
             }
           }
+        }
+      }
+      Rectangle {
+        visible: root.offerBinds
+        height: Style.space(26)
+        width: keysTxt.implicitWidth + Style.space(16)
+        radius: height / 2
+        color: Color.accent
+        Text {
+          id: keysTxt
+          anchors.centerIn: parent
+          text: "keys"
+          color: root.background
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+        }
+        MouseArea {
+          anchors.fill: parent
+          onClicked: root.keysRequested()
         }
       }
     }
