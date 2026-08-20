@@ -495,7 +495,7 @@ Item {
     id: mkdirProc
     running: false
     command: ["mkdir", "-p", root.stateDir]
-    onExited: {
+    onExited: function() {
       historyFile.reload()
       sessionFile.reload()
     }
@@ -587,9 +587,9 @@ Item {
   IpcHandler {
     target: "io.github.chris.chroma"
     function open(payload: string): string { root.open(payload || "{}"); return "ok" }
-    function close(): string { root.close(); return "ok" }
+    function close(arg: string): string { root.close(); return "ok" }
     function toggle(payload: string): string { root.toggle(payload || "{}"); return "ok" }
-    function ping(): string { return "ok" }
+    function ping(arg: string): string { return "ok" }
     function pick(arg: string): string { return root.pick(arg || "") }
     function palette(arg: string): string { return root.palette(arg || "") }
     function revert(arg: string): string { return root.revert(arg || "") }
