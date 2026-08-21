@@ -12,3 +12,5 @@
 .review_*
 .fix_prompt*
 .serena/
+__pycache__/
+*.pyc
